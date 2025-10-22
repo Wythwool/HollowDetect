@@ -1,0 +1,4 @@
+{
+  "ignore_process": ["*\\Windows\\System32\\*"],
+  "ignore_path": ["C:\\Windows\\*"]
+}

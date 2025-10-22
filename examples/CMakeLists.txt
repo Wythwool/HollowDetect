@@ -1,0 +1,1 @@
+add_executable(target_anom examples/target_anom.cpp)

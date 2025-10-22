@@ -1,0 +1,75 @@
+{
+  "$id": "https://hollowdetect/schema/anomaly.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "version",
+    "pid",
+    "process",
+    "base",
+    "size",
+    "type",
+    "protect",
+    "reasons",
+    "severity"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "process": {
+      "type": "string"
+    },
+    "base": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]+$"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "IMAGE",
+        "MAPPED",
+        "PRIVATE"
+      ]
+    },
+    "protect": {
+      "type": "string"
+    },
+    "mapped_path": {
+      "type": "string"
+    },
+    "is_pe": {
+      "type": "boolean"
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false
+}
