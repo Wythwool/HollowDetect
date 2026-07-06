@@ -7,6 +7,7 @@ namespace hollow {
 struct PeQuick {
     bool valid = false;
     bool is64 = false;
+    bool has_clr = false;
     uint16_t machine = 0;
     uint16_t sections = 0;
     uint16_t characteristics = 0;

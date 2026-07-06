@@ -38,10 +38,12 @@ static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
         o<<"      \"pid\": "<<a.pid<<",\n";
         o<<"      \"process\": "<<JsonString(a.process)<<",\n";
         o<<"      \"base\": "<<JsonString(ToHex64(a.base))<<",\n";
+        o<<"      \"allocation_base\": "<<JsonString(ToHex64(a.allocation_base))<<",\n";
         o<<"      \"size\": "<<a.size<<",\n";
         o<<"      \"type\": "<<JsonString(a.type)<<",\n";
         o<<"      \"protect\": "<<JsonString(a.protect)<<",\n";
         o<<"      \"mapped_path\": "<<JsonString(a.mapped_path)<<",\n";
+        o<<"      \"module_path\": "<<JsonString(a.module_path)<<",\n";
         o<<"      \"is_pe\": "<<(a.is_pe?"true":"false")<<",\n";
         o<<"      \"reasons\": [";
         for(size_t j=0;j<a.reasons.size();++j){ if(j) o<<", "; o<<JsonString(a.reasons[j]); }

@@ -23,10 +23,12 @@
           "pid",
           "process",
           "base",
+          "allocation_base",
           "size",
           "type",
           "protect",
           "mapped_path",
+          "module_path",
           "is_pe",
           "reasons",
           "severity",
@@ -48,6 +50,10 @@
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]+$"
           },
+          "allocation_base": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]+$"
+          },
           "size": {
             "type": "integer",
             "minimum": 0
@@ -64,6 +70,9 @@
             "type": "string"
           },
           "mapped_path": {
+            "type": "string"
+          },
+          "module_path": {
             "type": "string"
           },
           "is_pe": {

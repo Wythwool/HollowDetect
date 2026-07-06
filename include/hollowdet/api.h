@@ -5,6 +5,8 @@
 
 namespace hollow {
 
+inline constexpr const char* kToolVersion = "0.4.0";
+
 struct RegionInfo {
     uintptr_t base;
     size_t size;
@@ -18,10 +20,12 @@ struct Anomaly {
     DWORD pid;
     std::wstring process;
     uintptr_t base;
+    uintptr_t allocation_base;
     size_t size;
     std::string type;   // IMAGE/MAPPED/PRIVATE
     std::string protect;// e.g. RWX
     std::wstring mapped_path;
+    std::wstring module_path;
     bool is_pe;
     std::vector<std::string> reasons;
     std::string severity;

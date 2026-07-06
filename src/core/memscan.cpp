@@ -23,11 +23,25 @@ struct ThreadStart {
     uintptr_t address = 0;
 };
 
+struct ModuleEntry {
+    uintptr_t base = 0;
+    size_t size = 0;
+    std::wstring path;
+};
+
 using NtQueryInformationThreadPtr = LONG (WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
 
 } // namespace
 
 static std::wstring ToLower(const std::wstring& s){ std::wstring r=s; std::transform(r.begin(), r.end(), r.begin(), ::towlower); return r; }
+
+static std::wstring NormalizePath(std::wstring path){
+    std::replace(path.begin(), path.end(), L'/', L'\\');
+    if (path.rfind(L"\\\\?\\", 0) == 0) {
+        path.erase(0, 4);
+    }
+    return ToLower(path);
+}
 
 static bool StartsWithNoCase(const wchar_t* text, const wchar_t* prefix, size_t prefix_len){
     for (size_t i = 0; i < prefix_len; ++i) {
@@ -43,10 +57,14 @@ static std::wstring DosPathFromDevice(HANDLE proc, void* addr){
     // convert \Device\HarddiskVolumeX to drive:
     wchar_t drives[512]; if (!GetLogicalDriveStringsW(512, drives)) return dev;
     for (wchar_t* d=drives; *d; d += wcslen(d)+1){
-        wchar_t device[MAX_PATH]; if (!QueryDosDeviceW(d, device, MAX_PATH)) continue;
+        std::wstring drive = d;
+        while (!drive.empty() && drive.back() == L'\\') {
+            drive.pop_back();
+        }
+        wchar_t device[MAX_PATH]; if (!QueryDosDeviceW(drive.c_str(), device, MAX_PATH)) continue;
         size_t len = wcslen(device);
         if (StartsWithNoCase(dev, device, len)){
-            std::wstring out = d; out.pop_back(); // remove '\'
+            std::wstring out = drive;
             out += (dev + len);
             return out;
         }
@@ -127,8 +145,8 @@ static bool SamePeIdentity(const PeQuick& a, const PeQuick& b){
     return a.machine == b.machine &&
            a.sections == b.sections &&
            a.optional_magic == b.optional_magic &&
-           a.entry_rva == b.entry_rva &&
-           a.size_of_image == b.size_of_image &&
+           a.timestamp == b.timestamp &&
+           a.characteristics == b.characteristics &&
            a.subsystem == b.subsystem;
 }
 
@@ -141,6 +159,7 @@ static void AddImageHeaderComparison(const std::vector<unsigned char>& head, con
     if (!ReadFilePrefix(mapped, 4096, disk_head)) return;
     PeQuick disk_pe = ParsePe(disk_head.data(), disk_head.size());
     if (!disk_pe.valid) return;
+    if (memory_pe.has_clr || disk_pe.has_clr) return;
 
     if (!SamePeIdentity(memory_pe, disk_pe)) {
         reasons.push_back("ImageHeaderMismatch");
@@ -156,6 +175,57 @@ static std::string Fingerprint(const std::wstring& proc, const std::wstring& map
     o<<p8<<"|"<<m8<<"|"<<type<<"|"<<prot<<"|"<<(is_pe ? "pe" : "raw")<<"|";
     for (auto& r: reasons) o<<r<<",";
     return Sha256Str(o.str());
+}
+
+static bool CollectModules(DWORD pid, std::vector<ModuleEntry>& modules){
+    modules.clear();
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+
+    MODULEENTRY32W me{};
+    me.dwSize = sizeof(me);
+    if (!Module32FirstW(snap, &me)) {
+        CloseHandle(snap);
+        return false;
+    }
+
+    do {
+        ModuleEntry item{};
+        item.base = reinterpret_cast<uintptr_t>(me.modBaseAddr);
+        item.size = static_cast<size_t>(me.modBaseSize);
+        item.path = me.szExePath;
+        modules.push_back(item);
+    } while (Module32NextW(snap, &me));
+
+    CloseHandle(snap);
+    return true;
+}
+
+static const ModuleEntry* FindModuleByBase(const std::vector<ModuleEntry>& modules, uintptr_t base){
+    for (const auto& module : modules) {
+        if (module.base == base) {
+            return &module;
+        }
+    }
+    return nullptr;
+}
+
+static void AddModuleConsistency(const MEMORY_BASIC_INFORMATION& mbi, bool is_pe, const std::wstring& mapped, bool modules_known, const std::vector<ModuleEntry>& modules, std::wstring& module_path, std::vector<std::string>& reasons){
+    if (mbi.Type != MEM_IMAGE || mbi.AllocationBase != mbi.BaseAddress) return;
+
+    const ModuleEntry* module = FindModuleByBase(modules, reinterpret_cast<uintptr_t>(mbi.AllocationBase));
+    if (module) {
+        module_path = module->path;
+    }
+
+    if (!modules_known || !is_pe) return;
+    if (!module) {
+        reasons.push_back("ImageNotInModuleList");
+        return;
+    }
+    if (!mapped.empty() && !module->path.empty() && NormalizePath(mapped) != NormalizePath(module->path)) {
+        reasons.push_back("ModulePathMismatch");
+    }
 }
 
 static std::vector<ThreadStart> CollectThreadStarts(DWORD pid){
@@ -217,6 +287,8 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
     uintptr_t maxAddr = (uintptr_t)si.lpMaximumApplicationAddress;
     size_t evidence_count = 0;
     std::vector<ThreadStart> thread_starts = CollectThreadStarts(pid);
+    std::vector<ModuleEntry> modules;
+    bool modules_known = CollectModules(pid, modules);
     while (p < maxAddr){
         MEMORY_BASIC_INFORMATION mbi{};
         SIZE_T got = VirtualQueryEx(h, (LPCVOID)p, &mbi, sizeof(mbi));
@@ -229,6 +301,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         if (ShouldIgnore(process, mapped, opt)) continue;
         std::vector<std::string> reasons;
         std::vector<DWORD> thread_ids;
+        std::wstring module_path;
         bool is_pe=false;
         std::vector<unsigned char> head;
         if (IsReadableProbeTarget(mbi.Protect)) {
@@ -241,6 +314,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         if (mbi.Type == MEM_IMAGE && HasWriteExec(mbi.Protect)) reasons.push_back("ImageRWX");
         if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && IsReadableProbeTarget(mbi.Protect) && !is_pe) reasons.push_back("ImageHeaderNotMZ");
         if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && is_pe) AddImageHeaderComparison(head, mapped, reasons);
+        AddModuleConsistency(mbi, is_pe, mapped, modules_known, modules, module_path, reasons);
 
         if (mbi.Type == MEM_PRIVATE && HasExecute(mbi.Protect)) {
             thread_ids = ThreadsInRegion(thread_starts, reinterpret_cast<uintptr_t>(mbi.BaseAddress), static_cast<size_t>(mbi.RegionSize));
@@ -255,15 +329,19 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         a.pid = pid;
         a.process = process;
         a.base = (uintptr_t)mbi.BaseAddress;
+        a.allocation_base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
         a.size = (size_t)mbi.RegionSize;
         a.type = TypeToStr(mbi.Type);
         a.protect = ProtectToString(mbi.Protect);
         a.mapped_path = mapped;
+        a.module_path = module_path;
         a.is_pe = is_pe;
         // severity
         a.severity = (std::find(reasons.begin(),reasons.end(),"PrivatePE")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"ImageRWX")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"ImageHeaderMismatch")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"ImageNotInModuleList")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"ModulePathMismatch")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"PrivateThreadStart")!=reasons.end()) ? "high" :
                      (std::find(reasons.begin(),reasons.end(),"Write+Exec")!=reasons.end()) ? "medium" : "low";
         a.reasons = reasons;

@@ -21,6 +21,7 @@ static void TestHelpers(){
     Check(ProtectToString(PAGE_READONLY) == "R--", "bad read-only protection string");
     Check(JsonString("C:\\Tools\\A \"quote\"") == "\"C:\\\\Tools\\\\A \\\"quote\\\"\"", "bad JSON escaping");
     Check(Sha256Str("abc").size() == 64, "bad SHA-256 length");
+    Check(std::string(kToolVersion) == "0.4.0", "bad tool version");
 
     std::vector<unsigned char> pe(0x1000, 0);
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(pe.data());
@@ -39,6 +40,7 @@ static void TestHelpers(){
     PeQuick parsed = ParsePe(pe.data(), pe.size());
     Check(parsed.valid, "PE parser rejected valid header");
     Check(parsed.is64, "PE parser missed PE32+ magic");
+    Check(!parsed.has_clr, "PE parser reported CLR header unexpectedly");
     Check(parsed.machine == IMAGE_FILE_MACHINE_AMD64, "PE parser machine mismatch");
     Check(parsed.sections == 3, "PE parser section count mismatch");
     Check(parsed.entry_rva == 0x1234, "PE parser entry RVA mismatch");

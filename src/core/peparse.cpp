@@ -144,6 +144,9 @@ PeQuick ParsePe(const unsigned char* data, size_t size){
         out.size_of_image = opt->SizeOfImage;
         out.checksum = opt->CheckSum;
         out.subsystem = opt->Subsystem;
+        out.has_clr = opt->NumberOfRvaAndSizes > 14 &&
+                      opt->DataDirectory[14].VirtualAddress != 0 &&
+                      opt->DataDirectory[14].Size != 0;
     } else if (magic == 0x20b && opt_offset + sizeof(IMAGE_OPTIONAL_HEADER64_) <= size) {
         auto opt = (const IMAGE_OPTIONAL_HEADER64_*)(data + opt_offset);
         out.is64 = true;
@@ -152,6 +155,9 @@ PeQuick ParsePe(const unsigned char* data, size_t size){
         out.size_of_image = opt->SizeOfImage;
         out.checksum = opt->CheckSum;
         out.subsystem = opt->Subsystem;
+        out.has_clr = opt->NumberOfRvaAndSizes > 14 &&
+                      opt->DataDirectory[14].VirtualAddress != 0 &&
+                      opt->DataDirectory[14].Size != 0;
     }
     return out;
 }

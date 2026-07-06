@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0 - 2026-07-06
+- Added loader module-list consistency checks for image-backed allocations.
+- Added `ImageNotInModuleList` and `ModulePathMismatch` signals.
+- Added allocation base and module path fields to reports.
+- Added richer evidence metadata and a JSONL evidence manifest.
+
 ## v0.3.0 - 2026-07-06
 - Added memory-vs-disk PE identity comparison for image-backed regions.
 - Added private executable thread-start detection.

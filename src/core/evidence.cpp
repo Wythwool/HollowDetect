@@ -3,7 +3,9 @@
 #include "hollowdet/json.h"
 
 #include <algorithm>
+#include <iomanip>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace hollow {
@@ -31,17 +33,50 @@ bool WriteBinaryFile(const std::wstring& path, const std::vector<unsigned char>&
     return ok && written == data.size();
 }
 
-std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_name, size_t dump_size) {
+bool AppendTextLine(const std::wstring& path, const std::string& line) {
+    HANDLE file = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    DWORD written = 0;
+    bool ok = WriteFile(file, line.data(), static_cast<DWORD>(line.size()), &written, nullptr);
+    CloseHandle(file);
+    return ok && static_cast<size_t>(written) == line.size();
+}
+
+std::string Sha256Bytes(const std::vector<unsigned char>& bytes) {
+    return Sha256Str(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+}
+
+std::string UtcTimestamp() {
+    SYSTEMTIME st{};
+    GetSystemTime(&st);
+    std::ostringstream out;
+    out << std::setfill('0')
+        << std::setw(4) << st.wYear << "-"
+        << std::setw(2) << st.wMonth << "-"
+        << std::setw(2) << st.wDay << "T"
+        << std::setw(2) << st.wHour << ":"
+        << std::setw(2) << st.wMinute << ":"
+        << std::setw(2) << st.wSecond << "Z";
+    return out.str();
+}
+
+std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_name, size_t dump_size, const std::string& dump_sha256, const std::string& captured_at) {
     std::ostringstream out;
     out << "{\n";
     out << "  \"version\": 1,\n";
+    out << "  \"tool_version\": " << JsonString(kToolVersion) << ",\n";
+    out << "  \"captured_at_utc\": " << JsonString(captured_at) << ",\n";
     out << "  \"pid\": " << anomaly.pid << ",\n";
     out << "  \"process\": " << JsonString(anomaly.process) << ",\n";
     out << "  \"base\": " << JsonString(ToHex64(anomaly.base)) << ",\n";
+    out << "  \"allocation_base\": " << JsonString(ToHex64(anomaly.allocation_base)) << ",\n";
     out << "  \"size\": " << anomaly.size << ",\n";
     out << "  \"type\": " << JsonString(anomaly.type) << ",\n";
     out << "  \"protect\": " << JsonString(anomaly.protect) << ",\n";
     out << "  \"mapped_path\": " << JsonString(anomaly.mapped_path) << ",\n";
+    out << "  \"module_path\": " << JsonString(anomaly.module_path) << ",\n";
     out << "  \"is_pe\": " << (anomaly.is_pe ? "true" : "false") << ",\n";
     out << "  \"reasons\": [";
     for (size_t i = 0; i < anomaly.reasons.size(); ++i) {
@@ -62,7 +97,48 @@ std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_
     out << "  \"severity\": " << JsonString(anomaly.severity) << ",\n";
     out << "  \"fingerprint\": " << JsonString(anomaly.fingerprint) << ",\n";
     out << "  \"dump_file\": " << JsonString(dump_name) << ",\n";
-    out << "  \"dump_size\": " << dump_size << "\n";
+    out << "  \"dump_size\": " << dump_size << ",\n";
+    out << "  \"dump_sha256\": " << JsonString(dump_sha256) << "\n";
+    out << "}\n";
+    return out.str();
+}
+
+std::string RenderManifestLine(const Anomaly& anomaly, const std::wstring& dump_name, const std::wstring& json_name, size_t dump_size, const std::string& dump_sha256, const std::string& captured_at) {
+    std::ostringstream out;
+    out << "{";
+    out << "\"version\":1";
+    out << ",\"tool_version\":" << JsonString(kToolVersion);
+    out << ",\"captured_at_utc\":" << JsonString(captured_at);
+    out << ",\"pid\":" << anomaly.pid;
+    out << ",\"process\":" << JsonString(anomaly.process);
+    out << ",\"base\":" << JsonString(ToHex64(anomaly.base));
+    out << ",\"allocation_base\":" << JsonString(ToHex64(anomaly.allocation_base));
+    out << ",\"type\":" << JsonString(anomaly.type);
+    out << ",\"protect\":" << JsonString(anomaly.protect);
+    out << ",\"mapped_path\":" << JsonString(anomaly.mapped_path);
+    out << ",\"module_path\":" << JsonString(anomaly.module_path);
+    out << ",\"reasons\":[";
+    for (size_t i = 0; i < anomaly.reasons.size(); ++i) {
+        if (i != 0) {
+            out << ",";
+        }
+        out << JsonString(anomaly.reasons[i]);
+    }
+    out << "]";
+    out << ",\"thread_ids\":[";
+    for (size_t i = 0; i < anomaly.thread_ids.size(); ++i) {
+        if (i != 0) {
+            out << ",";
+        }
+        out << anomaly.thread_ids[i];
+    }
+    out << "]";
+    out << ",\"severity\":" << JsonString(anomaly.severity);
+    out << ",\"fingerprint\":" << JsonString(anomaly.fingerprint);
+    out << ",\"dump_file\":" << JsonString(dump_name);
+    out << ",\"metadata_file\":" << JsonString(json_name);
+    out << ",\"dump_size\":" << dump_size;
+    out << ",\"dump_sha256\":" << JsonString(dump_sha256);
     out << "}\n";
     return out.str();
 }
@@ -84,6 +160,7 @@ bool WriteEvidence(HANDLE process, const Anomaly& anomaly, size_t max_dump_bytes
     std::wstring json_name = stem.str() + L".json";
     std::wstring dump_path = directory + L"\\" + dump_name;
     std::wstring json_path = directory + L"\\" + json_name;
+    std::wstring manifest_path = directory + L"\\manifest.jsonl";
 
     std::vector<unsigned char> bytes;
     size_t wanted = std::min<size_t>(anomaly.size, max_dump_bytes);
@@ -93,7 +170,12 @@ bool WriteEvidence(HANDLE process, const Anomaly& anomaly, size_t max_dump_bytes
     if (!WriteBinaryFile(dump_path, bytes)) {
         return false;
     }
-    return WriteTextFile(json_path, RenderEvidenceJson(anomaly, dump_name, bytes.size()));
+    std::string captured_at = UtcTimestamp();
+    std::string dump_sha256 = Sha256Bytes(bytes);
+    if (!WriteTextFile(json_path, RenderEvidenceJson(anomaly, dump_name, bytes.size(), dump_sha256, captured_at))) {
+        return false;
+    }
+    return AppendTextLine(manifest_path, RenderManifestLine(anomaly, dump_name, json_name, bytes.size(), dump_sha256, captured_at));
 }
 
 } // namespace hollow
