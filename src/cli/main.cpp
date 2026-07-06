@@ -144,12 +144,12 @@ static int CmdScan(int argc, wchar_t** argv){
     ScanSystem(opt, items);
     if (!opt.quiet){
         for (auto& a: items){
-            std::wcout<<L"[ "<<(a.severity=="high"?L"H":(a.severity=="medium"?L"M":L"L"))<<L" ] PID="<<a.pid<<L" "<<a.process<<L" "<<a.mapped_path<<L" "<<a.type.c_str()<<L" "<<a.protect.c_str()<<L" "<<a.fingerprint.c_str()<<L"\n";
+            std::wcout<<L"[ "<<(a.severity=="high"?L"H":(a.severity=="medium"?L"M":L"L"))<<L" ] PID="<<a.pid<<L" "<<a.process<<L" "<<a.mapped_path<<L" "<<Utf8ToWide(a.type)<<L" "<<Utf8ToWide(a.protect)<<L" "<<Utf8ToWide(a.fingerprint)<<L"\n";
         }
     }
     int rc = RenderJson(items, jsonOut);
     // fail-on
-    int thr = SeverityRank(std::string(fail.begin(), fail.end()));
+    int thr = SeverityRank(WideToUtf8(fail));
     if (thr < 0){ std::cerr<<"bad --fail-on value\n"; return 2; }
     int worst=0;
     for (auto& a: items){
@@ -175,7 +175,7 @@ static int CmdBaselineCreate(int argc, wchar_t** argv){
     std::wstring app = procPath;
     if (app.empty() && !items.empty()) app = items[0].process; // best effort
     std::vector<std::wstring> fps;
-    for (auto& a: items){ if (a.process == app) fps.push_back(std::wstring(a.fingerprint.begin(), a.fingerprint.end())); }
+    for (auto& a: items){ if (a.process == app) fps.push_back(Utf8ToWide(a.fingerprint)); }
     if (!SaveBaseline(out, app, fps)){ std::cerr<<"baseline write failed\n"; return 2; }
     std::wcout<<L"Wrote baseline "<<out<<L" for "<<app<<L"\n";
     return 0;

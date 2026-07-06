@@ -152,7 +152,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         // baseline filter
         bool suppressed=false;
         for (auto& fp : opt.baseline_fps){
-            if (ToLower(std::wstring(fp.begin(), fp.end())) == ToLower(std::wstring(a.fingerprint.begin(), a.fingerprint.end()))){ suppressed=true; break; }
+            if (ToLower(fp) == ToLower(Utf8ToWide(a.fingerprint))){ suppressed=true; break; }
         }
         if (suppressed) continue;
 
