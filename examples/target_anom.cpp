@@ -1,8 +1,9 @@
 #include <windows.h>
 #include <cstdio>
+#include <cwchar>
 #include <cstring>
 
-int wmain(){
+static int RunTarget(){
     // allocate RWX and place a minimal 'MZ'...'PE' signature to simulate hollowing.
     void* p = VirtualAlloc(NULL, 0x2000, MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     unsigned char* b = (unsigned char*)p;
@@ -14,6 +15,16 @@ int wmain(){
         b[0x80] = 'P'; b[0x81] = 'E'; b[0x82] = 0; b[0x83] = 0;
     }
     wprintf(L"target_anom ready, pid=%lu\n", GetCurrentProcessId());
-    Sleep(500); // give scanner some time
+    Sleep(5000); // keep the sample process alive while the scanner runs
     return 0;
 }
+
+int wmain(){
+    return RunTarget();
+}
+
+#ifndef _MSC_VER
+int main(){
+    return RunTarget();
+}
+#endif

@@ -1,4 +1,5 @@
 #include "hollowdet/api.h"
+#include "hollowdet/evidence.h"
 #include "hollowdet/peparse.h"
 #include <psapi.h>
 #include <shlwapi.h>
@@ -6,6 +7,7 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <cwctype>
 
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -14,6 +16,15 @@ namespace hollow {
 
 static std::wstring ToLower(const std::wstring& s){ std::wstring r=s; std::transform(r.begin(), r.end(), r.begin(), ::towlower); return r; }
 
+static bool StartsWithNoCase(const wchar_t* text, const wchar_t* prefix, size_t prefix_len){
+    for (size_t i = 0; i < prefix_len; ++i) {
+        if (std::towlower(text[i]) != std::towlower(prefix[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static std::wstring DosPathFromDevice(HANDLE proc, void* addr){
     wchar_t dev[MAX_PATH]; if (!GetMappedFileNameW(proc, addr, dev, MAX_PATH)) return L"";
     // convert \Device\HarddiskVolumeX to drive:
@@ -21,7 +32,7 @@ static std::wstring DosPathFromDevice(HANDLE proc, void* addr){
     for (wchar_t* d=drives; *d; d += wcslen(d)+1){
         wchar_t device[MAX_PATH]; if (!QueryDosDeviceW(d, device, MAX_PATH)) continue;
         size_t len = wcslen(device);
-        if (_wcsnicmp(dev, device, len)==0){
+        if (StartsWithNoCase(dev, device, len)){
             std::wstring out = d; out.pop_back(); // remove '\'
             out += (dev + len);
             return out;
@@ -53,9 +64,21 @@ static std::string TypeToStr(DWORD t){
     return "PRIVATE";
 }
 
+static DWORD BaseProtect(DWORD protect) {
+    return protect & 0xff;
+}
+
+static bool IsReadableProbeTarget(DWORD protect) {
+    if ((protect & PAGE_GUARD) != 0) {
+        return false;
+    }
+    return BaseProtect(protect) != PAGE_NOACCESS;
+}
+
 static bool HasWriteExec(DWORD protect){
-    bool w = (protect & (PAGE_READWRITE|PAGE_EXECUTE_READWRITE|PAGE_WRITECOPY|PAGE_EXECUTE_WRITECOPY)) != 0;
-    bool x = (protect & (PAGE_EXECUTE|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY)) != 0;
+    DWORD base = BaseProtect(protect);
+    bool w = (base == PAGE_READWRITE || base == PAGE_EXECUTE_READWRITE || base == PAGE_WRITECOPY || base == PAGE_EXECUTE_WRITECOPY);
+    bool x = (base == PAGE_EXECUTE || base == PAGE_EXECUTE_READ || base == PAGE_EXECUTE_READWRITE || base == PAGE_EXECUTE_WRITECOPY);
     return w && x;
 }
 
@@ -64,45 +87,15 @@ static bool ContainsMzPe(const std::vector<unsigned char>& buf){
     return ParsePe(buf.data(), buf.size()).valid;
 }
 
-static std::string Fingerprint(const std::wstring& proc, uintptr_t base, const std::string& type, const std::string& prot, const std::vector<std::string>& reasons){
+static std::string Fingerprint(const std::wstring& proc, const std::wstring& mapped, const std::string& type, const std::string& prot, bool is_pe, const std::vector<std::string>& reasons){
     std::ostringstream o; 
     std::wstring pl = ToLower(proc);
+    std::wstring ml = ToLower(mapped);
     std::string p8(pl.begin(), pl.end());
-    o<<p8<<"|"<<type<<"|"<<prot<<"|"<<std::hex<<base<<"|";
+    std::string m8(ml.begin(), ml.end());
+    o<<p8<<"|"<<m8<<"|"<<type<<"|"<<prot<<"|"<<(is_pe ? "pe" : "raw")<<"|";
     for (auto& r: reasons) o<<r<<",";
     return Sha256Str(o.str());
-}
-
-static bool DumpEvidence(HANDLE h, const Anomaly& a, size_t maxdump, const std::wstring& dir){
-    if (dir.empty() || maxdump==0) return true;
-    CreateDirectoryW(dir.c_str(), NULL);
-    std::wstringstream fn;
-    fn<<dir<<L"\\pid"<<a.pid<<L"_"<<std::hex<<a.base<<L".bin";
-    std::vector<unsigned char> buf;
-    if (!ReadRemote(h, a.base, (size_t)min<size_t>(a.size, maxdump), buf)) return false;
-    HANDLE f = CreateFileW(fn.str().c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f==INVALID_HANDLE_VALUE) return false;
-    DWORD wr=0; WriteFile(f, buf.data(), (DWORD)buf.size(), &wr, NULL); CloseHandle(f);
-
-    std::wstringstream jn; jn<<dir<<L"\\pid"<<a.pid<<L"_"<<std::hex<<a.base<<L".json";
-    std::ostringstream js;
-    js<<"{\n";
-    js<<"  \"version\":1,\n";
-    js<<"  \"pid\":"<<a.pid<<",\n";
-    js<<"  \"process\":\""; for (auto c : a.process) js<<(c<128?(char)c:'?'); js<<"\",\n";
-    js<<"  \"base\":\""<<ToHex64(a.base)<<"\",\n";
-    js<<"  \"size\":"<<a.size<<",\n";
-    js<<"  \"type\":\""<<a.type<<"\",\n";
-    js<<"  \"protect\":\""<<a.protect<<"\",\n";
-    js<<"  \"mapped_path\":\""; for (auto c : a.mapped_path) js<<(c<128?(char)c:'?'); js<<"\",\n";
-    js<<"  \"is_pe\":"<<(a.is_pe?"true":"false")<<",\n";
-    js<<"  \"reasons\":["; for(size_t i=0;i<a.reasons.size();++i){ if(i) js<<","; js<<"\""<<a.reasons[i]<<"\""; } js<<"],\n";
-    js<<"  \"severity\":\""<<a.severity<<"\",\n";
-    js<<"  \"fingerprint\":\""<<a.fingerprint<<"\"\n";
-    js<<"}\n";
-    HANDLE jf = CreateFileW(jn.str().c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (jf!=INVALID_HANDLE_VALUE){ WriteFile(jf, js.str().data(), (DWORD)js.str().size(), &wr, NULL); CloseHandle(jf); }
-    return true;
 }
 
 static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out){
@@ -119,21 +112,24 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         MEMORY_BASIC_INFORMATION mbi{};
         SIZE_T got = VirtualQueryEx(h, (LPCVOID)p, &mbi, sizeof(mbi));
         if (got != sizeof(mbi)) break;
-        p = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        uintptr_t next = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= p) break;
+        p = next;
         if (mbi.State != MEM_COMMIT) continue;
         std::wstring mapped = DosPathFromDevice(h, mbi.BaseAddress);
         if (ShouldIgnore(process, mapped, opt)) continue;
         std::vector<std::string> reasons;
         bool is_pe=false;
-        // read a page
-        std::vector<unsigned char> head;
-        ReadRemote(h, (uintptr_t)mbi.BaseAddress, (size_t)min<SIZE_T>(mbi.RegionSize, 4096), head);
-        if (!head.empty()) is_pe = ContainsMzPe(head);
+        if (IsReadableProbeTarget(mbi.Protect)) {
+            std::vector<unsigned char> head;
+            ReadRemote(h, (uintptr_t)mbi.BaseAddress, (size_t)std::min<SIZE_T>(mbi.RegionSize, 4096), head);
+            if (!head.empty()) is_pe = ContainsMzPe(head);
+        }
 
         if (mbi.Type == MEM_PRIVATE && is_pe) reasons.push_back("PrivatePE");
         if (HasWriteExec(mbi.Protect)) reasons.push_back("Write+Exec");
         if (mbi.Type == MEM_IMAGE && HasWriteExec(mbi.Protect)) reasons.push_back("ImageRWX");
-        if (mbi.Type == MEM_IMAGE && !is_pe) reasons.push_back("ImageHeaderNotMZ");
+        if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && IsReadableProbeTarget(mbi.Protect) && !is_pe) reasons.push_back("ImageHeaderNotMZ");
 
         if (reasons.empty()) continue;
 
@@ -150,7 +146,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         a.severity = (std::find(reasons.begin(),reasons.end(),"PrivatePE")!=reasons.end() || std::find(reasons.begin(),reasons.end(),"ImageRWX")!=reasons.end()) ? "high" :
                      (std::find(reasons.begin(),reasons.end(),"Write+Exec")!=reasons.end()) ? "medium" : "low";
         a.reasons = reasons;
-        a.fingerprint = Fingerprint(process, a.base, a.type, a.protect, a.reasons);
+        a.fingerprint = Fingerprint(process, mapped, a.type, a.protect, a.is_pe, a.reasons);
 
         // baseline filter
         bool suppressed=false;
@@ -162,7 +158,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         out.push_back(a);
 
         if (!opt.evidence_dir.empty() && evidence_count < 16){
-            DumpEvidence(h, a, opt.max_dump_bytes, opt.evidence_dir);
+            WriteEvidence(h, a, opt.max_dump_bytes, opt.evidence_dir);
             evidence_count++;
         }
     }

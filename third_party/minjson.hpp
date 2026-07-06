@@ -10,14 +10,14 @@ namespace minjson {
         enum kind { STR, NUM, BOOL, ARR, OBJ, NIL } k = NIL;
         std::string s; double n=0; bool b=false;
         std::vector<value> a;
-        std::map<std::string, value> o;
+        std::map<std::string, value> obj;
         static value string(const std::string& s){ value v; v.k=STR; v.s=s; return v; }
         static value number(double n){ value v; v.k=NUM; v.n=n; return v; }
         static value boolean(bool b){ value v; v.k=BOOL; v.b=b; return v; }
         static value array(){ value v; v.k=ARR; return v; }
         static value object(){ value v; v.k=OBJ; return v; }
         static value null(){ value v; v.k=NIL; return v; }
-        value& operator[](const std::string& key){ k=OBJ; return o[key]; }
+        value& operator[](const std::string& key){ k=OBJ; return obj[key]; }
         void push(const value& v){ if (k!=ARR) k=ARR; a.push_back(v); }
         static std::string esc(const std::string& in){
             std::ostringstream o; o<<'"';
@@ -56,12 +56,12 @@ namespace minjson {
                 case OBJ: {
                     o<<"{";
                     bool first=true;
-                    for (auto& kv : o){
+                    for (auto& kv : obj){
                         if (!first) o<<",";
                         o<<"\n"<<std::string((level+1)*indent,' ')<<esc(kv.first)<<": "<<kv.second.dump(indent, level+1);
                         first=false;
                     }
-                    if (!o.empty()) o<<"\n"<<std::string(level*indent,' ');
+                    if (!obj.empty()) o<<"\n"<<std::string(level*indent,' ');
                     o<<"}";
                 } break;
             }

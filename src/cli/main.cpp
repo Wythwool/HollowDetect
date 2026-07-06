@@ -1,10 +1,15 @@
 #include "hollowdet/api.h"
+#include "hollowdet/json.h"
 #include <windows.h>
 #include <string>
 #include <vector>
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <iterator>
+#include <map>
+#include <set>
+#include <sstream>
 
 using namespace hollow;
 
@@ -22,30 +27,98 @@ static void Usage(){
 
 static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
     std::ostringstream o;
-    o<<"{\n  \"version\":1,\n  \"$schema\":\"https://hollowdetect/schema/anomaly.json\",\n  \"items\":[\n";
+    o<<"{\n";
+    o<<"  \"version\": 1,\n";
+    o<<"  \"$schema\": \"https://hollowdetect/schema/anomaly.json\",\n";
+    o<<"  \"items\": [\n";
     for (size_t i=0;i<v.size();++i){
         auto& a=v[i];
-        o<<"    {\"version\":1,\"pid\":"<<a.pid<<",\"process\":\"";
-        for (auto c: a.process) o<<(c<128?(char)c:'?');
-        o<<"\","
-         <<"\"base\":\""<<ToHex64(a.base)<<"\",\"size\":"<<a.size
-         <<",\"type\":\""<<a.type<<"\",\"protect\":\""<<a.protect<<"\",\"mapped_path\":\"";
-        for (auto c: a.mapped_path) o<<(c<128?(char)c:'?');
-        o<<"\",\"is_pe\":"<<(a.is_pe?"true":"false")<<",\"reasons\":[";
-        for(size_t j=0;j<a.reasons.size();++j){ if(j) o<<","; o<<"\""<<a.reasons[j]<<"\""; }
-        o<<"],\"severity\":\""<<a.severity<<"\",\"fingerprint\":\""<<a.fingerprint<<"\"}";
+        o<<"    {\n";
+        o<<"      \"version\": 1,\n";
+        o<<"      \"pid\": "<<a.pid<<",\n";
+        o<<"      \"process\": "<<JsonString(a.process)<<",\n";
+        o<<"      \"base\": "<<JsonString(ToHex64(a.base))<<",\n";
+        o<<"      \"size\": "<<a.size<<",\n";
+        o<<"      \"type\": "<<JsonString(a.type)<<",\n";
+        o<<"      \"protect\": "<<JsonString(a.protect)<<",\n";
+        o<<"      \"mapped_path\": "<<JsonString(a.mapped_path)<<",\n";
+        o<<"      \"is_pe\": "<<(a.is_pe?"true":"false")<<",\n";
+        o<<"      \"reasons\": [";
+        for(size_t j=0;j<a.reasons.size();++j){ if(j) o<<", "; o<<JsonString(a.reasons[j]); }
+        o<<"],\n";
+        o<<"      \"severity\": "<<JsonString(a.severity)<<",\n";
+        o<<"      \"fingerprint\": "<<JsonString(a.fingerprint)<<"\n";
+        o<<"    }";
         if (i+1<v.size()) o<<",";
         o<<"\n";
     }
-    o<<"  ]\n}\n";
+    o<<"  ]\n";
+    o<<"}\n";
     if (path.empty()){ std::cout<<o.str(); return 0; }
-    std::ofstream f(path, std::ios::binary); if (!f){ std::cerr<<"write failed\n"; return 2; }
-    auto s=o.str(); f.write(s.data(), s.size());
+    if (!WriteTextFile(path, o.str())){ std::cerr<<"write failed\n"; return 2; }
     return 0;
 }
 
+static int SeverityRank(const std::string& value) {
+    static const std::map<std::string,int> rank{{"none",0},{"low",1},{"medium",2},{"high",3},{"critical",4}};
+    auto it = rank.find(value);
+    return it == rank.end() ? -1 : it->second;
+}
+
+static std::set<std::string> FingerprintsFromReport(const std::wstring& path) {
+    std::string text;
+    std::set<std::string> out;
+    if (!ReadTextFile(path, text)) {
+        return out;
+    }
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t key = text.find("\"fingerprint\"", pos);
+        if (key == std::string::npos) {
+            break;
+        }
+        std::string_view tail(text.data() + key, text.size() - key);
+        auto fp = JsonFindString(tail, "fingerprint");
+        if (fp && !fp->empty()) {
+            out.insert(*fp);
+        }
+        pos = key + 13;
+    }
+    return out;
+}
+
+static int RenderSnapshotDiff(const std::set<std::string>& old_items, const std::set<std::string>& new_items) {
+    std::vector<std::string> added;
+    std::vector<std::string> removed;
+    std::set_difference(new_items.begin(), new_items.end(), old_items.begin(), old_items.end(), std::back_inserter(added));
+    std::set_difference(old_items.begin(), old_items.end(), new_items.begin(), new_items.end(), std::back_inserter(removed));
+
+    std::ostringstream out;
+    out << "{\n";
+    out << "  \"version\": 1,\n";
+    out << "  \"old_count\": " << old_items.size() << ",\n";
+    out << "  \"new_count\": " << new_items.size() << ",\n";
+    out << "  \"added_count\": " << added.size() << ",\n";
+    out << "  \"removed_count\": " << removed.size() << ",\n";
+    out << "  \"added\": [";
+    for (size_t i = 0; i < added.size(); ++i) {
+        if (i != 0) out << ", ";
+        out << JsonString(added[i]);
+    }
+    out << "],\n";
+    out << "  \"removed\": [";
+    for (size_t i = 0; i < removed.size(); ++i) {
+        if (i != 0) out << ", ";
+        out << JsonString(removed[i]);
+    }
+    out << "]\n";
+    out << "}\n";
+    std::cout << out.str();
+    return (!added.empty() || !removed.empty()) ? 1 : 0;
+}
+
 static int CmdScan(int argc, wchar_t** argv){
-    ScanOptions opt; std::wstring jsonOut, exFile, blFile, appName;
+    ScanOptions opt; std::wstring jsonOut, exFile, blFile;
     std::wstring fail = L"medium";
     for (int i=2;i<argc;i++){
         std::wstring a=argv[i];
@@ -53,14 +126,19 @@ static int CmdScan(int argc, wchar_t** argv){
         else if (a==L"--all") opt.all = true;
         else if (a==L"--json" && i+1<argc) jsonOut = argv[++i];
         else if (a==L"--evidence" && i+1<argc) opt.evidence_dir = argv[++i];
-        else if (a==L"--max-dump-bytes" && i+1<argc) opt.max_dump_bytes = _wtoi(argv[++i]);
+        else if (a==L"--max-dump-bytes" && i+1<argc) opt.max_dump_bytes = wcstoul(argv[++i], NULL, 10);
         else if (a==L"--exceptions" && i+1<argc) exFile = argv[++i];
         else if (a==L"--baseline" && i+1<argc) blFile = argv[++i];
         else if (a==L"--fail-on" && i+1<argc) fail = argv[++i];
         else if (a==L"--quiet") opt.quiet = true;
     }
-    LoadExceptions(exFile, opt.ignore_proc, opt.ignore_paths);
-    std::wstring app; LoadBaseline(blFile, app, opt.baseline_fps);
+    if (!LoadExceptions(exFile, opt.ignore_proc, opt.ignore_paths)){
+        std::cerr<<"bad exceptions file\n"; return 2;
+    }
+    if (!blFile.empty()){
+        std::wstring app;
+        if (!LoadBaseline(blFile, app, opt.baseline_fps)){ std::cerr<<"bad baseline file\n"; return 2; }
+    }
 
     std::vector<Anomaly> items;
     ScanSystem(opt, items);
@@ -71,8 +149,8 @@ static int CmdScan(int argc, wchar_t** argv){
     }
     int rc = RenderJson(items, jsonOut);
     // fail-on
-    std::map<std::string,int> rank{{"none",0},{"low",1},{"medium",2},{"high",3},{"critical",4}};
-    int thr = rank[std::string(fail.begin(), fail.end())];
+    int thr = SeverityRank(std::string(fail.begin(), fail.end()));
+    if (thr < 0){ std::cerr<<"bad --fail-on value\n"; return 2; }
     int worst=0;
     for (auto& a: items){
         int lv = (a.severity=="critical")?4:(a.severity=="high")?3:(a.severity=="medium")?2:(a.severity=="low")?1:0;
@@ -136,24 +214,19 @@ static int CmdSnapshotSave(int argc, wchar_t** argv){
 
 static int CmdSnapshotDiff(int argc, wchar_t** argv){
     if (argc<5){ std::cerr<<"args\n"; return 2; }
-    std::wifstream A(argv[3]), B(argv[4]); if (!A||!B){ std::cerr<<"read\n"; return 2; }
-    std::wstring sa((std::istreambuf_iterator<wchar_t>(A)), {});
-    std::wstring sb((std::istreambuf_iterator<wchar_t>(B)), {});
-    auto count_items = [](const std::wstring& s)->int{
-        int c=0; size_t pos=0; while ((pos = s.find(L"\"fingerprint\"", pos)) != std::wstring::npos){ c++; pos+=5; } return c;
-    };
-    int ca = count_items(sa), cb = count_items(sb);
-    std::wcout<<L"items_old="<<ca<<L" items_new="<<cb<<L"\n";
-    return 0;
+    auto old_items = FingerprintsFromReport(argv[3]);
+    auto new_items = FingerprintsFromReport(argv[4]);
+    return RenderSnapshotDiff(old_items, new_items);
 }
 
-int wmain(int argc, wchar_t** argv){
+static int Main(int argc, wchar_t** argv){
     if (argc<2){ Usage(); return 2; }
     std::wstring cmd = argv[1];
     if (cmd==L"self-check"){ std::wcout<<L"OK\n"; return 0; }
     if (cmd==L"dump-schema"){
-        std::wifstream f(L"schema\\anomaly.schema.json"); if (!f){ std::wcerr<<L"schema not found\n"; return 2; }
-        std::wcout<<f.rdbuf(); return 0;
+        std::string schema;
+        if (!ReadTextFile(L"schema\\anomaly.schema.json", schema)){ std::wcerr<<L"schema not found\n"; return 2; }
+        std::cout<<schema; return 0;
     }
     if (cmd==L"scan") return CmdScan(argc, argv);
     if (cmd==L"baseline" && argc>=3){
@@ -168,3 +241,23 @@ int wmain(int argc, wchar_t** argv){
     }
     Usage(); return 2;
 }
+
+#ifdef _MSC_VER
+int wmain(int argc, wchar_t** argv){
+    return Main(argc, argv);
+}
+#else
+int main(int argc, char** argv){
+    std::vector<std::wstring> wide;
+    std::vector<wchar_t*> args;
+    wide.reserve(static_cast<size_t>(argc));
+    args.reserve(static_cast<size_t>(argc));
+    for (int i = 0; i < argc; ++i) {
+        wide.push_back(Utf8ToWide(argv[i]));
+    }
+    for (auto& arg : wide) {
+        args.push_back(arg.data());
+    }
+    return Main(argc, args.data());
+}
+#endif

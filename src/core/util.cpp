@@ -15,16 +15,17 @@ std::string ToHex64(uint64_t v){
 
 std::string ProtectToString(DWORD p){
     bool r=false,w=false,x=false;
-    if (p & PAGE_EXECUTE) x=true;
-    if (p & PAGE_EXECUTE_READ) {x=true; r=true;}
-    if (p & PAGE_EXECUTE_READWRITE) {x=true; r=true; w=true;}
-    if (p & PAGE_EXECUTE_WRITECOPY) {x=true; r=true; w=true;}
-    if (p & PAGE_READONLY) r=true;
-    if (p & PAGE_READWRITE) {r=true; w=true;}
-    if (p & PAGE_WRITECOPY) {r=true; w=true;}
+    DWORD base = p & 0xff;
+    if (base == PAGE_EXECUTE) x=true;
+    if (base == PAGE_EXECUTE_READ) {x=true; r=true;}
+    if (base == PAGE_EXECUTE_READWRITE) {x=true; r=true; w=true;}
+    if (base == PAGE_EXECUTE_WRITECOPY) {x=true; r=true; w=true;}
+    if (base == PAGE_READONLY) r=true;
+    if (base == PAGE_READWRITE) {r=true; w=true;}
+    if (base == PAGE_WRITECOPY) {r=true; w=true;}
     std::string s; s += (r?'R':'-'); s += (w?'W':'-'); s += (x?'X':'-');
     if (p & PAGE_GUARD) s += 'G';
-    if (p & PAGE_NOACCESS) s = "NOACC";
+    if (base == PAGE_NOACCESS) s = "NOACC";
     return s;
 }
 

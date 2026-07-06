@@ -1,0 +1,10 @@
+build*/
+out/
+*.user
+*.suo
+*.VC.db
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.zip
