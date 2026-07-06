@@ -5,7 +5,7 @@
 
 namespace hollow {
 
-inline constexpr const char* kToolVersion = "0.6.0";
+inline constexpr const char* kToolVersion = "0.7.0";
 
 struct RegionInfo {
     uintptr_t base;
@@ -28,6 +28,9 @@ struct Anomaly {
     std::wstring module_path;
     std::string section_name;
     std::string section_flags;
+    double region_entropy = 0.0;
+    double section_entropy = -1.0;
+    uint64_t overlay_size = 0;
     std::vector<std::string> import_dlls;
     std::vector<std::string> import_names;
     std::vector<std::string> export_names;

@@ -2,7 +2,9 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cmath>
 #include <utility>
 
 namespace hollow {
@@ -229,6 +231,54 @@ static std::string ReadCStringRva(const unsigned char* data, size_t size, const 
     return {};
 }
 
+static double ByteEntropy(const unsigned char* data, size_t size, size_t offset, size_t length) {
+    if (offset >= size || length == 0) {
+        return -1.0;
+    }
+    size_t available = std::min(length, size - offset);
+    if (available == 0) {
+        return -1.0;
+    }
+
+    std::array<size_t, 256> counts{};
+    for (size_t i = 0; i < available; ++i) {
+        ++counts[data[offset + i]];
+    }
+
+    double entropy = 0.0;
+    double total = static_cast<double>(available);
+    for (size_t count : counts) {
+        if (count == 0) {
+            continue;
+        }
+        double p = static_cast<double>(count) / total;
+        entropy -= p * std::log2(p);
+    }
+    return entropy;
+}
+
+static void FillSectionStats(const unsigned char* data, size_t size, PeQuick& out) {
+    uint64_t raw_end = 0;
+    for (auto& section : out.section_table) {
+        if (section.raw_size != 0) {
+            uint64_t end = static_cast<uint64_t>(section.raw_offset) + section.raw_size;
+            raw_end = std::max(raw_end, end);
+        }
+
+        if (section.raw_size != 0 && section.raw_offset < size) {
+            section.entropy = ByteEntropy(data, size, section.raw_offset, section.raw_size);
+            continue;
+        }
+        if (section.virtual_size != 0 && section.virtual_address < size) {
+            section.entropy = ByteEntropy(data, size, section.virtual_address, section.virtual_size);
+        }
+    }
+    out.raw_image_end = raw_end;
+    if (raw_end != 0 && raw_end < size) {
+        out.overlay_size = static_cast<uint64_t>(size) - raw_end;
+    }
+}
+
 static bool IsZeroImportDescriptor(const IMAGE_IMPORT_DESCRIPTOR_& desc) {
     return desc.OriginalFirstThunk == 0 &&
            desc.TimeDateStamp == 0 &&
@@ -431,6 +481,7 @@ PeQuick ParsePe(const unsigned char* data, size_t size){
         item.characteristics = sec->Characteristics;
         out.section_table.push_back(item);
     }
+    FillSectionStats(data, size, out);
     ParseImports(data, size, out);
     ParseExports(data, size, out);
     return out;

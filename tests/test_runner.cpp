@@ -22,7 +22,7 @@ static void TestHelpers(){
     Check(ProtectToString(PAGE_READONLY) == "R--", "bad read-only protection string");
     Check(JsonString("C:\\Tools\\A \"quote\"") == "\"C:\\\\Tools\\\\A \\\"quote\\\"\"", "bad JSON escaping");
     Check(Sha256Str("abc").size() == 64, "bad SHA-256 length");
-    Check(std::string(kToolVersion) == "0.6.0", "bad tool version");
+    Check(std::string(kToolVersion) == "0.7.0", "bad tool version");
 
     std::vector<unsigned char> pe(0x1000, 0);
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(pe.data());
@@ -46,8 +46,12 @@ static void TestHelpers(){
     std::memcpy(section->Name, ".text", 5);
     section->VirtualAddress = 0x1000;
     section->Misc.VirtualSize = 0x2000;
-    section->SizeOfRawData = 0x2000;
+    section->PointerToRawData = 0x600;
+    section->SizeOfRawData = 0x100;
     section->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
+    for (size_t i = 0; i < 0x100; ++i) {
+        pe[0x600 + i] = static_cast<unsigned char>(i);
+    }
 
     auto import_desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(pe.data() + 0x300);
     import_desc[0].OriginalFirstThunk = 0x340;
@@ -86,6 +90,10 @@ static void TestHelpers(){
     Check(parsed.section_table.size() == 3, "PE parser section count table mismatch");
     Check(parsed.section_table[0].name == ".text", "PE parser section name mismatch");
     Check(parsed.section_table[0].virtual_address == 0x1000, "PE parser section RVA mismatch");
+    Check(parsed.section_table[0].raw_offset == 0x600, "PE parser section raw offset mismatch");
+    Check(parsed.section_table[0].entropy > 7.9, "PE parser section entropy mismatch");
+    Check(parsed.raw_image_end == 0x700, "PE parser raw image end mismatch");
+    Check(parsed.overlay_size == 0x900, "PE parser overlay size mismatch");
     Check(parsed.imports.size() == 1, "PE parser import DLL count mismatch");
     Check(parsed.imports[0].dll == "KERNEL32.dll", "PE parser import DLL name mismatch");
     Check(parsed.imports[0].names.size() == 1, "PE parser import name count mismatch");

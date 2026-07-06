@@ -73,6 +73,45 @@ void RenderStringArray(std::ostringstream& out, const std::vector<std::string>& 
     out << "]";
 }
 
+std::string JsonEntropy(double value) {
+    if (value < 0.0) {
+        return "null";
+    }
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << value;
+    return out.str();
+}
+
+std::string RenderEvidenceIndex(const std::string& manifest_text, const std::string& updated_at) {
+    std::vector<std::string> lines;
+    std::istringstream input(manifest_text);
+    std::string line;
+    while (std::getline(input, line)) {
+        if (!line.empty()) {
+            lines.push_back(line);
+        }
+    }
+
+    std::ostringstream out;
+    out << "{\n";
+    out << "  \"version\": 1,\n";
+    out << "  \"tool_version\": " << JsonString(kToolVersion) << ",\n";
+    out << "  \"updated_at_utc\": " << JsonString(updated_at) << ",\n";
+    out << "  \"manifest_file\": \"manifest.jsonl\",\n";
+    out << "  \"item_count\": " << lines.size() << ",\n";
+    out << "  \"captures\": [\n";
+    for (size_t i = 0; i < lines.size(); ++i) {
+        out << "    " << lines[i];
+        if (i + 1 != lines.size()) {
+            out << ",";
+        }
+        out << "\n";
+    }
+    out << "  ]\n";
+    out << "}\n";
+    return out.str();
+}
+
 std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_name, size_t dump_size, const std::string& dump_sha256, const std::string& captured_at) {
     std::ostringstream out;
     out << "{\n";
@@ -90,6 +129,9 @@ std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_
     out << "  \"module_path\": " << JsonString(anomaly.module_path) << ",\n";
     out << "  \"section_name\": " << JsonString(anomaly.section_name) << ",\n";
     out << "  \"section_flags\": " << JsonString(anomaly.section_flags) << ",\n";
+    out << "  \"region_entropy\": " << JsonEntropy(anomaly.region_entropy) << ",\n";
+    out << "  \"section_entropy\": " << JsonEntropy(anomaly.section_entropy) << ",\n";
+    out << "  \"overlay_size\": " << anomaly.overlay_size << ",\n";
     out << "  \"import_dlls\": ";
     RenderStringArray(out, anomaly.import_dlls, ", ");
     out << ",\n";
@@ -144,6 +186,9 @@ std::string RenderManifestLine(const Anomaly& anomaly, const std::wstring& dump_
     out << ",\"module_path\":" << JsonString(anomaly.module_path);
     out << ",\"section_name\":" << JsonString(anomaly.section_name);
     out << ",\"section_flags\":" << JsonString(anomaly.section_flags);
+    out << ",\"region_entropy\":" << JsonEntropy(anomaly.region_entropy);
+    out << ",\"section_entropy\":" << JsonEntropy(anomaly.section_entropy);
+    out << ",\"overlay_size\":" << anomaly.overlay_size;
     out << ",\"import_dlls\":";
     RenderStringArray(out, anomaly.import_dlls, ",");
     out << ",\"import_names\":";
@@ -196,6 +241,7 @@ bool WriteEvidence(HANDLE process, const Anomaly& anomaly, size_t max_dump_bytes
     std::wstring dump_path = directory + L"\\" + dump_name;
     std::wstring json_path = directory + L"\\" + json_name;
     std::wstring manifest_path = directory + L"\\manifest.jsonl";
+    std::wstring index_path = directory + L"\\index.json";
 
     std::vector<unsigned char> bytes;
     size_t wanted = std::min<size_t>(anomaly.size, max_dump_bytes);
@@ -210,7 +256,15 @@ bool WriteEvidence(HANDLE process, const Anomaly& anomaly, size_t max_dump_bytes
     if (!WriteTextFile(json_path, RenderEvidenceJson(anomaly, dump_name, bytes.size(), dump_sha256, captured_at))) {
         return false;
     }
-    return AppendTextLine(manifest_path, RenderManifestLine(anomaly, dump_name, json_name, bytes.size(), dump_sha256, captured_at));
+    if (!AppendTextLine(manifest_path, RenderManifestLine(anomaly, dump_name, json_name, bytes.size(), dump_sha256, captured_at))) {
+        return false;
+    }
+
+    std::string manifest_text;
+    if (!ReadTextFile(manifest_path, manifest_text)) {
+        return false;
+    }
+    return WriteTextFile(index_path, RenderEvidenceIndex(manifest_text, captured_at));
 }
 
 } // namespace hollow

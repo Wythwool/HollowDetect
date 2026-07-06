@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0 - 2026-07-06
+- Added region and PE section entropy metadata.
+- Added raw PE overlay size metadata for mapped image files.
+- Added `HighEntropyExecutable` and `LargeOverlay` context signals.
+- Added `index.json` generation for evidence directories.
+
 ## v0.6.0 - 2026-07-06
 - Added bounded PE import table parsing for DLL and API names.
 - Added PE export name parsing.

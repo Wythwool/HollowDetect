@@ -31,6 +31,9 @@
           "module_path",
           "section_name",
           "section_flags",
+          "region_entropy",
+          "section_entropy",
+          "overlay_size",
           "import_dlls",
           "import_names",
           "export_names",
@@ -86,6 +89,23 @@
           },
           "section_flags": {
             "type": "string"
+          },
+          "region_entropy": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 8
+          },
+          "section_entropy": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 8
+          },
+          "overlay_size": {
+            "type": "integer",
+            "minimum": 0
           },
           "import_dlls": {
             "type": "array",

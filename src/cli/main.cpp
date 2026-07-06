@@ -6,6 +6,7 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <iomanip>
 #include <iterator>
 #include <map>
 #include <set>
@@ -36,6 +37,15 @@ static void RenderStringArray(std::ostringstream& out, const std::vector<std::st
     out << "]";
 }
 
+static std::string JsonEntropy(double value) {
+    if (value < 0.0) {
+        return "null";
+    }
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3) << value;
+    return out.str();
+}
+
 static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
     std::ostringstream o;
     o<<"{\n";
@@ -57,6 +67,9 @@ static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
         o<<"      \"module_path\": "<<JsonString(a.module_path)<<",\n";
         o<<"      \"section_name\": "<<JsonString(a.section_name)<<",\n";
         o<<"      \"section_flags\": "<<JsonString(a.section_flags)<<",\n";
+        o<<"      \"region_entropy\": "<<JsonEntropy(a.region_entropy)<<",\n";
+        o<<"      \"section_entropy\": "<<JsonEntropy(a.section_entropy)<<",\n";
+        o<<"      \"overlay_size\": "<<a.overlay_size<<",\n";
         o<<"      \"import_dlls\": ";
         RenderStringArray(o, a.import_dlls);
         o<<",\n";

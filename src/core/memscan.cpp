@@ -9,7 +9,9 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cmath>
 #include <cwctype>
 #include <cstring>
 #include <map>
@@ -190,6 +192,67 @@ static std::string SectionFlags(uint32_t characteristics){
     return out;
 }
 
+static double ByteEntropy(const std::vector<unsigned char>& bytes) {
+    if (bytes.empty()) {
+        return 0.0;
+    }
+
+    std::array<size_t, 256> counts{};
+    for (unsigned char ch : bytes) {
+        ++counts[ch];
+    }
+
+    double entropy = 0.0;
+    double total = static_cast<double>(bytes.size());
+    for (size_t count : counts) {
+        if (count == 0) {
+            continue;
+        }
+        double p = static_cast<double>(count) / total;
+        entropy -= p * std::log2(p);
+    }
+    return entropy;
+}
+
+static bool FileSizeBytes(const std::wstring& path, uint64_t& size) {
+    size = 0;
+    if (path.empty()) {
+        return false;
+    }
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    LARGE_INTEGER value{};
+    bool ok = GetFileSizeEx(file, &value) && value.QuadPart >= 0;
+    CloseHandle(file);
+    if (!ok) {
+        return false;
+    }
+    size = static_cast<uint64_t>(value.QuadPart);
+    return true;
+}
+
+static uint64_t OverlaySizeForFile(const std::wstring& path, std::map<std::wstring, uint64_t>& cache) {
+    std::wstring key = NormalizePath(path);
+    auto found = cache.find(key);
+    if (found != cache.end()) {
+        return found->second;
+    }
+
+    uint64_t overlay_size = 0;
+    uint64_t file_size = 0;
+    std::vector<unsigned char> head;
+    if (FileSizeBytes(path, file_size) && ReadFilePrefix(path, 65536, head)) {
+        PeQuick pe = ParsePe(head.data(), head.size());
+        if (pe.valid && pe.raw_image_end != 0 && file_size > pe.raw_image_end) {
+            overlay_size = file_size - pe.raw_image_end;
+        }
+    }
+    cache.emplace(key, overlay_size);
+    return overlay_size;
+}
+
 static std::string LowerAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
         return static_cast<char>(std::tolower(ch));
@@ -283,10 +346,11 @@ static const ImageLayout& LoadImageLayout(HANDLE process, uintptr_t allocation_b
     return inserted.first->second;
 }
 
-static void AddSectionProtectionCheck(const MEMORY_BASIC_INFORMATION& mbi, const PeSection* section, std::string& section_name, std::string& section_flags, std::vector<std::string>& reasons){
+static void AddSectionProtectionCheck(const MEMORY_BASIC_INFORMATION& mbi, const PeSection* section, std::string& section_name, std::string& section_flags, double& section_entropy, std::vector<std::string>& reasons){
     if (!section) return;
     section_name = section->name;
     section_flags = SectionFlags(section->characteristics);
+    section_entropy = section->entropy;
 
     bool section_write = (section->characteristics & 0x80000000) != 0;
     bool section_exec = (section->characteristics & 0x20000000) != 0;
@@ -435,6 +499,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
     std::vector<ModuleEntry> modules;
     bool modules_known = CollectModules(pid, modules);
     std::map<uintptr_t, ImageLayout> image_cache;
+    std::map<std::wstring, uint64_t> overlay_cache;
     while (p < maxAddr){
         MEMORY_BASIC_INFORMATION mbi{};
         SIZE_T got = VirtualQueryEx(h, (LPCVOID)p, &mbi, sizeof(mbi));
@@ -450,12 +515,18 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         std::wstring module_path;
         std::string section_name;
         std::string section_flags;
+        double region_entropy = 0.0;
+        double section_entropy = -1.0;
+        uint64_t overlay_size = 0;
         PeMetadata pe_metadata;
         bool is_pe=false;
         std::vector<unsigned char> head;
         if (IsReadableProbeTarget(mbi.Protect)) {
             ReadRemote(h, (uintptr_t)mbi.BaseAddress, (size_t)std::min<SIZE_T>(mbi.RegionSize, 4096), head);
-            if (!head.empty()) is_pe = ContainsMzPe(head);
+            if (!head.empty()) {
+                region_entropy = ByteEntropy(head);
+                is_pe = ContainsMzPe(head);
+            }
         }
 
         if (mbi.Type == MEM_PRIVATE && is_pe) reasons.push_back("PrivatePE");
@@ -469,9 +540,10 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
             const ImageLayout& layout = LoadImageLayout(h, allocation_base, image_cache);
             if (layout.valid) {
                 uintptr_t rva = reinterpret_cast<uintptr_t>(mbi.BaseAddress) - allocation_base;
-                AddSectionProtectionCheck(mbi, FindSectionForRva(layout.pe, rva), section_name, section_flags, reasons);
+                AddSectionProtectionCheck(mbi, FindSectionForRva(layout.pe, rva), section_name, section_flags, section_entropy, reasons);
                 pe_metadata = ExtractPeMetadata(layout.pe);
             }
+            overlay_size = OverlaySizeForFile(mapped, overlay_cache);
         }
 
         if (mbi.Type == MEM_PRIVATE && is_pe && IsReadableProbeTarget(mbi.Protect)) {
@@ -480,10 +552,17 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
                 PeQuick pe = ParsePe(pe_bytes.data(), pe_bytes.size());
                 if (pe.valid) {
                     pe_metadata = ExtractPeMetadata(pe);
+                    overlay_size = pe.overlay_size;
                 }
             }
         }
         AddSuspiciousImportContext(mbi.Type, pe_metadata, reasons);
+        if (HasExecute(mbi.Protect) && region_entropy >= 7.2 && (mbi.Type == MEM_PRIVATE || !reasons.empty())) {
+            reasons.push_back("HighEntropyExecutable");
+        }
+        if (overlay_size >= 1024ull * 1024ull && !reasons.empty()) {
+            reasons.push_back("LargeOverlay");
+        }
 
         if (mbi.Type == MEM_PRIVATE && HasExecute(mbi.Protect)) {
             thread_ids = ThreadsInRegion(thread_starts, reinterpret_cast<uintptr_t>(mbi.BaseAddress), static_cast<size_t>(mbi.RegionSize));
@@ -506,6 +585,9 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         a.module_path = module_path;
         a.section_name = section_name;
         a.section_flags = section_flags;
+        a.region_entropy = region_entropy;
+        a.section_entropy = section_entropy;
+        a.overlay_size = overlay_size;
         a.import_dlls = pe_metadata.import_dlls;
         a.import_names = pe_metadata.import_names;
         a.export_names = pe_metadata.export_names;
@@ -519,6 +601,8 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
                       std::find(reasons.begin(),reasons.end(),"ModulePathMismatch")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"SectionProtectionMismatch")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"SuspiciousImports")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"HighEntropyExecutable")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"LargeOverlay")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"PrivateThreadStart")!=reasons.end()) ? "high" :
                      (std::find(reasons.begin(),reasons.end(),"Write+Exec")!=reasons.end()) ? "medium" : "low";
         a.reasons = reasons;

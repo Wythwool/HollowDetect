@@ -13,6 +13,7 @@ struct PeSection {
     uint32_t raw_offset = 0;
     uint32_t raw_size = 0;
     uint32_t characteristics = 0;
+    double entropy = -1.0;
 };
 
 struct PeImportDll {
@@ -38,6 +39,8 @@ struct PeQuick {
     uint32_t import_size = 0;
     uint32_t export_rva = 0;
     uint32_t export_size = 0;
+    uint64_t raw_image_end = 0;
+    uint64_t overlay_size = 0;
     uint64_t image_base = 0;
     std::vector<PeSection> section_table;
     std::vector<PeImportDll> imports;

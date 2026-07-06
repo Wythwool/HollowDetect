@@ -1,6 +1,6 @@
 # HollowDetect
 
-Windows user-mode detector for process hollowing and executable memory anomalies. It walks process memory with `VirtualQueryEx`, checks in-memory PE headers, flags private PE mappings, writable executable pages, suspicious image permissions, and can write a small evidence package for each finding.
+Windows user-mode detector for process hollowing and executable memory anomalies. It walks process memory with `VirtualQueryEx`, checks in-memory PE headers, flags private PE mappings, writable executable pages, suspicious image permissions, PE section mismatches, import context, entropy, overlay metadata, and can write a small evidence package for each finding.
 
 ## Why
 
@@ -44,9 +44,11 @@ hollowdet dump-schema
 - `ModulePathMismatch`: the VAD mapped path and loader module path disagree for the same image base.
 - `SectionProtectionMismatch`: an image page is writable and executable even though the PE section is not marked for both.
 - `SuspiciousImports`: the PE imports API groups commonly used for remote memory, thread-context, section mapping, or image unmapping work, attached only as context for an existing suspicious region.
+- `HighEntropyExecutable`: executable bytes in an already suspicious region look packed or compressed.
+- `LargeOverlay`: the mapped PE file has a large raw overlay and the region is already suspicious.
 - `PrivateThreadStart`: a thread starts inside a private executable region.
 
-Severity is intentionally simple: private PE, image RWX, module/VAD mismatch, section protection mismatch, suspicious imports on a suspicious region, image header mismatch, and private thread start are high; writable executable memory is medium; missing image header is low.
+Severity is intentionally simple: private PE, image RWX, module/VAD mismatch, section protection mismatch, suspicious imports on a suspicious region, high-entropy executable bytes, large overlay context, image header mismatch, and private thread start are high; writable executable memory is medium; missing image header is low.
 
 ## Example
 
@@ -73,9 +75,9 @@ Baselines store stable finding fingerprints for known benign applications. Excep
 
 ## Output
 
-`scan` and `snapshot save` write a JSON document with a top-level `items` array. Each item contains the process path, region address, allocation base, protection, mapped path, loader module path, PE section name/flags when available, imported DLLs, imported API names, exported names, API group tags, reasons, optional thread IDs, severity, and stable fingerprint. `snapshot diff` prints added and removed fingerprints as JSON.
+`scan` and `snapshot save` write a JSON document with a top-level `items` array. Each item contains the process path, region address, allocation base, protection, mapped path, loader module path, PE section name/flags when available, region entropy, section entropy, overlay size, imported DLLs, imported API names, exported names, API group tags, reasons, optional thread IDs, severity, and stable fingerprint. `snapshot diff` prints added and removed fingerprints as JSON.
 
-Evidence mode writes a `.bin` memory slice, a matching metadata JSON file, and appends one line per capture to `manifest.jsonl`. The metadata includes the tool version, UTC capture time, dump size, and SHA-256 of the captured bytes.
+Evidence mode writes a `.bin` memory slice, a matching metadata JSON file, appends one line per capture to `manifest.jsonl`, and refreshes `index.json` for the evidence directory. The metadata includes the tool version, UTC capture time, dump size, entropy/overlay context, and SHA-256 of the captured bytes.
 
 ## Limitations
 
