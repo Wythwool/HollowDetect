@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0 - 2026-07-06
+- Added memory-vs-disk PE identity comparison for image-backed regions.
+- Added private executable thread-start detection.
+- Added `thread_ids` to JSON reports and evidence metadata.
+- Extended the PE quick parser with stable identity fields.
+
 ## v0.2.0 - 2026-07-06
 - Fixed CMake source paths for examples and tests.
 - Added Windows CI and ZIP packaging.

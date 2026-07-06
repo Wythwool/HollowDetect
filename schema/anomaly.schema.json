@@ -75,6 +75,13 @@
               "type": "string"
             }
           },
+          "thread_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
           "severity": {
             "type": "string",
             "enum": [

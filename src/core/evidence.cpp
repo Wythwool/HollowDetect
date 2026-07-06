@@ -51,6 +51,14 @@ std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_
         out << JsonString(anomaly.reasons[i]);
     }
     out << "],\n";
+    out << "  \"thread_ids\": [";
+    for (size_t i = 0; i < anomaly.thread_ids.size(); ++i) {
+        if (i != 0) {
+            out << ", ";
+        }
+        out << anomaly.thread_ids[i];
+    }
+    out << "],\n";
     out << "  \"severity\": " << JsonString(anomaly.severity) << ",\n";
     out << "  \"fingerprint\": " << JsonString(anomaly.fingerprint) << ",\n";
     out << "  \"dump_file\": " << JsonString(dump_name) << ",\n";

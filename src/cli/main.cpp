@@ -46,6 +46,9 @@ static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
         o<<"      \"reasons\": [";
         for(size_t j=0;j<a.reasons.size();++j){ if(j) o<<", "; o<<JsonString(a.reasons[j]); }
         o<<"],\n";
+        o<<"      \"thread_ids\": [";
+        for(size_t j=0;j<a.thread_ids.size();++j){ if(j) o<<", "; o<<a.thread_ids[j]; }
+        o<<"],\n";
         o<<"      \"severity\": "<<JsonString(a.severity)<<",\n";
         o<<"      \"fingerprint\": "<<JsonString(a.fingerprint)<<"\n";
         o<<"    }";

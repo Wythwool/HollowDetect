@@ -4,26 +4,45 @@
 #include <windows.h>
 #include <string>
 #include <vector>
-#include <cassert>
+#include <cstdlib>
 #include <iostream>
 
 using namespace hollow;
 
+static void Check(bool value, const char* message){
+    if (!value) {
+        std::cerr<<message<<"\n";
+        std::exit(1);
+    }
+}
+
 static void TestHelpers(){
-    assert(ProtectToString(PAGE_EXECUTE_READWRITE) == "RWX");
-    assert(ProtectToString(PAGE_READONLY) == "R--");
-    assert(JsonString("C:\\Tools\\A \"quote\"") == "\"C:\\\\Tools\\\\A \\\"quote\\\"\"");
-    assert(Sha256Str("abc").size() == 64);
+    Check(ProtectToString(PAGE_EXECUTE_READWRITE) == "RWX", "bad RWX protection string");
+    Check(ProtectToString(PAGE_READONLY) == "R--", "bad read-only protection string");
+    Check(JsonString("C:\\Tools\\A \"quote\"") == "\"C:\\\\Tools\\\\A \\\"quote\\\"\"", "bad JSON escaping");
+    Check(Sha256Str("abc").size() == 64, "bad SHA-256 length");
 
     std::vector<unsigned char> pe(0x1000, 0);
-    pe[0] = 'M';
-    pe[1] = 'Z';
-    *reinterpret_cast<int*>(&pe[0x3c]) = 0x80;
-    pe[0x80] = 'P';
-    pe[0x81] = 'E';
-    pe[0x82] = 0;
-    pe[0x83] = 0;
-    assert(ParsePe(pe.data(), pe.size()).valid);
+    auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(pe.data());
+    dos->e_magic = IMAGE_DOS_SIGNATURE;
+    dos->e_lfanew = 0x80;
+    auto nt = reinterpret_cast<IMAGE_NT_HEADERS64*>(pe.data() + dos->e_lfanew);
+    nt->Signature = IMAGE_NT_SIGNATURE;
+    nt->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
+    nt->FileHeader.NumberOfSections = 3;
+    nt->FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+    nt->OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    nt->OptionalHeader.AddressOfEntryPoint = 0x1234;
+    nt->OptionalHeader.SizeOfImage = 0x5000;
+    nt->OptionalHeader.Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI;
+
+    PeQuick parsed = ParsePe(pe.data(), pe.size());
+    Check(parsed.valid, "PE parser rejected valid header");
+    Check(parsed.is64, "PE parser missed PE32+ magic");
+    Check(parsed.machine == IMAGE_FILE_MACHINE_AMD64, "PE parser machine mismatch");
+    Check(parsed.sections == 3, "PE parser section count mismatch");
+    Check(parsed.entry_rva == 0x1234, "PE parser entry RVA mismatch");
+    Check(parsed.size_of_image == 0x5000, "PE parser image size mismatch");
 }
 
 static std::wstring NormalizeTestPath(std::wstring path){

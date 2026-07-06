@@ -25,7 +25,8 @@ struct Anomaly {
     bool is_pe;
     std::vector<std::string> reasons;
     std::string severity;
-    std::string fingerprint; // sha256 of (process_path|type|protect|base|reasons)
+    std::string fingerprint;
+    std::vector<DWORD> thread_ids;
 };
 
 struct ScanOptions {

@@ -39,8 +39,10 @@ hollowdet dump-schema
 - `Write+Exec`: a committed region has writable and executable protection.
 - `ImageRWX`: an image-backed region is writable and executable.
 - `ImageHeaderNotMZ`: the first readable region of an image allocation does not expose an MZ/PE header.
+- `ImageHeaderMismatch`: the in-memory PE identity differs from the mapped file on disk.
+- `PrivateThreadStart`: a thread starts inside a private executable region.
 
-Severity is intentionally simple: `PrivatePE` and `ImageRWX` are high, `Write+Exec` is medium, and image header mismatch is low.
+Severity is intentionally simple: private PE, image RWX, image header mismatch, and private thread start are high; writable executable memory is medium; missing image header is low.
 
 ## Example
 
@@ -67,7 +69,7 @@ Baselines store stable finding fingerprints for known benign applications. Excep
 
 ## Output
 
-`scan` and `snapshot save` write a JSON document with a top-level `items` array. Each item contains the process path, region address, protection, mapped path, reasons, severity, and stable fingerprint. `snapshot diff` prints added and removed fingerprints as JSON.
+`scan` and `snapshot save` write a JSON document with a top-level `items` array. Each item contains the process path, region address, protection, mapped path, reasons, optional thread IDs, severity, and stable fingerprint. `snapshot diff` prints added and removed fingerprints as JSON.
 
 ## Limitations
 

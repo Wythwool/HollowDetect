@@ -4,16 +4,28 @@
 #include "hollowdet/peparse.h"
 #include <psapi.h>
 #include <shlwapi.h>
+#include <tlhelp32.h>
 #include <vector>
 #include <string>
 #include <sstream>
 #include <algorithm>
 #include <cwctype>
+#include <cstring>
 
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Shlwapi.lib")
 
 namespace hollow {
+namespace {
+
+struct ThreadStart {
+    DWORD tid = 0;
+    uintptr_t address = 0;
+};
+
+using NtQueryInformationThreadPtr = LONG (WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+
+} // namespace
 
 static std::wstring ToLower(const std::wstring& s){ std::wstring r=s; std::transform(r.begin(), r.end(), r.begin(), ::towlower); return r; }
 
@@ -47,6 +59,23 @@ static bool ReadRemote(HANDLE h, uintptr_t base, size_t n, std::vector<unsigned 
     SIZE_T rd=0; if (!ReadProcessMemory(h, (LPCVOID)base, out.data(), n, &rd)) { out.clear(); return false; }
     out.resize(rd);
     return rd>0;
+}
+
+static bool ReadFilePrefix(const std::wstring& path, size_t max_bytes, std::vector<unsigned char>& out){
+    out.clear();
+    if (path.empty() || max_bytes == 0) return false;
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    out.assign(max_bytes, 0);
+    DWORD read = 0;
+    bool ok = ReadFile(file, out.data(), static_cast<DWORD>(out.size()), &read, nullptr);
+    CloseHandle(file);
+    if (!ok || read == 0) {
+        out.clear();
+        return false;
+    }
+    out.resize(read);
+    return true;
 }
 
 static bool MatchWildcards(const std::wstring& s, const std::wstring& pat){
@@ -83,9 +112,39 @@ static bool HasWriteExec(DWORD protect){
     return w && x;
 }
 
+static bool HasExecute(DWORD protect){
+    DWORD base = BaseProtect(protect);
+    return base == PAGE_EXECUTE || base == PAGE_EXECUTE_READ || base == PAGE_EXECUTE_READWRITE || base == PAGE_EXECUTE_WRITECOPY;
+}
+
 static bool ContainsMzPe(const std::vector<unsigned char>& buf){
     if (buf.size() < 0x100) return false;
     return ParsePe(buf.data(), buf.size()).valid;
+}
+
+static bool SamePeIdentity(const PeQuick& a, const PeQuick& b){
+    if (!a.valid || !b.valid) return false;
+    return a.machine == b.machine &&
+           a.sections == b.sections &&
+           a.optional_magic == b.optional_magic &&
+           a.entry_rva == b.entry_rva &&
+           a.size_of_image == b.size_of_image &&
+           a.subsystem == b.subsystem;
+}
+
+static void AddImageHeaderComparison(const std::vector<unsigned char>& head, const std::wstring& mapped, std::vector<std::string>& reasons){
+    if (head.empty() || mapped.empty()) return;
+    PeQuick memory_pe = ParsePe(head.data(), head.size());
+    if (!memory_pe.valid) return;
+
+    std::vector<unsigned char> disk_head;
+    if (!ReadFilePrefix(mapped, 4096, disk_head)) return;
+    PeQuick disk_pe = ParsePe(disk_head.data(), disk_head.size());
+    if (!disk_pe.valid) return;
+
+    if (!SamePeIdentity(memory_pe, disk_pe)) {
+        reasons.push_back("ImageHeaderMismatch");
+    }
 }
 
 static std::string Fingerprint(const std::wstring& proc, const std::wstring& mapped, const std::string& type, const std::string& prot, bool is_pe, const std::vector<std::string>& reasons){
@@ -99,6 +158,54 @@ static std::string Fingerprint(const std::wstring& proc, const std::wstring& map
     return Sha256Str(o.str());
 }
 
+static std::vector<ThreadStart> CollectThreadStarts(DWORD pid){
+    std::vector<ThreadStart> out;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return out;
+    FARPROC raw_query = GetProcAddress(ntdll, "NtQueryInformationThread");
+    NtQueryInformationThreadPtr query = nullptr;
+    static_assert(sizeof(raw_query) == sizeof(query));
+    std::memcpy(&query, &raw_query, sizeof(query));
+    if (!query) return out;
+
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;
+
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    if (!Thread32First(snap, &te)) {
+        CloseHandle(snap);
+        return out;
+    }
+
+    do {
+        if (te.th32OwnerProcessID != pid) continue;
+        HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+        if (!thread) continue;
+        PVOID start = nullptr;
+        LONG status = query(thread, 9, &start, sizeof(start), nullptr); // ThreadQuerySetWin32StartAddress
+        CloseHandle(thread);
+        if (status >= 0 && start != nullptr) {
+            out.push_back(ThreadStart{te.th32ThreadID, reinterpret_cast<uintptr_t>(start)});
+        }
+    } while (Thread32Next(snap, &te));
+
+    CloseHandle(snap);
+    return out;
+}
+
+static std::vector<DWORD> ThreadsInRegion(const std::vector<ThreadStart>& starts, uintptr_t base, size_t size){
+    std::vector<DWORD> tids;
+    uintptr_t end = base + size;
+    if (end <= base) return tids;
+    for (const auto& item : starts) {
+        if (item.address >= base && item.address < end) {
+            tids.push_back(item.tid);
+        }
+    }
+    return tids;
+}
+
 static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out){
     HANDLE h = OpenProcess(PROCESS_QUERY_INFORMATION|PROCESS_VM_READ, FALSE, pid);
     if (!h) return false;
@@ -109,6 +216,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
     SYSTEM_INFO si{}; GetSystemInfo(&si);
     uintptr_t maxAddr = (uintptr_t)si.lpMaximumApplicationAddress;
     size_t evidence_count = 0;
+    std::vector<ThreadStart> thread_starts = CollectThreadStarts(pid);
     while (p < maxAddr){
         MEMORY_BASIC_INFORMATION mbi{};
         SIZE_T got = VirtualQueryEx(h, (LPCVOID)p, &mbi, sizeof(mbi));
@@ -120,9 +228,10 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         std::wstring mapped = DosPathFromDevice(h, mbi.BaseAddress);
         if (ShouldIgnore(process, mapped, opt)) continue;
         std::vector<std::string> reasons;
+        std::vector<DWORD> thread_ids;
         bool is_pe=false;
+        std::vector<unsigned char> head;
         if (IsReadableProbeTarget(mbi.Protect)) {
-            std::vector<unsigned char> head;
             ReadRemote(h, (uintptr_t)mbi.BaseAddress, (size_t)std::min<SIZE_T>(mbi.RegionSize, 4096), head);
             if (!head.empty()) is_pe = ContainsMzPe(head);
         }
@@ -131,6 +240,14 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         if (HasWriteExec(mbi.Protect)) reasons.push_back("Write+Exec");
         if (mbi.Type == MEM_IMAGE && HasWriteExec(mbi.Protect)) reasons.push_back("ImageRWX");
         if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && IsReadableProbeTarget(mbi.Protect) && !is_pe) reasons.push_back("ImageHeaderNotMZ");
+        if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && is_pe) AddImageHeaderComparison(head, mapped, reasons);
+
+        if (mbi.Type == MEM_PRIVATE && HasExecute(mbi.Protect)) {
+            thread_ids = ThreadsInRegion(thread_starts, reinterpret_cast<uintptr_t>(mbi.BaseAddress), static_cast<size_t>(mbi.RegionSize));
+            if (!thread_ids.empty()) {
+                reasons.push_back("PrivateThreadStart");
+            }
+        }
 
         if (reasons.empty()) continue;
 
@@ -144,9 +261,13 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         a.mapped_path = mapped;
         a.is_pe = is_pe;
         // severity
-        a.severity = (std::find(reasons.begin(),reasons.end(),"PrivatePE")!=reasons.end() || std::find(reasons.begin(),reasons.end(),"ImageRWX")!=reasons.end()) ? "high" :
+        a.severity = (std::find(reasons.begin(),reasons.end(),"PrivatePE")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"ImageRWX")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"ImageHeaderMismatch")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"PrivateThreadStart")!=reasons.end()) ? "high" :
                      (std::find(reasons.begin(),reasons.end(),"Write+Exec")!=reasons.end()) ? "medium" : "low";
         a.reasons = reasons;
+        a.thread_ids = thread_ids;
         a.fingerprint = Fingerprint(process, mapped, a.type, a.protect, a.is_pe, a.reasons);
 
         // baseline filter
