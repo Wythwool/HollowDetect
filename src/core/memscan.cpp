@@ -1,5 +1,6 @@
 #include "hollowdet/api.h"
 #include "hollowdet/evidence.h"
+#include "hollowdet/json.h"
 #include "hollowdet/peparse.h"
 #include <psapi.h>
 #include <shlwapi.h>
@@ -91,8 +92,8 @@ static std::string Fingerprint(const std::wstring& proc, const std::wstring& map
     std::ostringstream o; 
     std::wstring pl = ToLower(proc);
     std::wstring ml = ToLower(mapped);
-    std::string p8(pl.begin(), pl.end());
-    std::string m8(ml.begin(), ml.end());
+    std::string p8 = WideToUtf8(pl);
+    std::string m8 = WideToUtf8(ml);
     o<<p8<<"|"<<m8<<"|"<<type<<"|"<<prot<<"|"<<(is_pe ? "pe" : "raw")<<"|";
     for (auto& r: reasons) o<<r<<",";
     return Sha256Str(o.str());
