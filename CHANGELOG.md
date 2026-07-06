@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.0 - 2026-07-06
+- Added bounded PE import table parsing for DLL and API names.
+- Added PE export name parsing.
+- Added import DLLs, import names, export names, and API group tags to reports and evidence metadata.
+- Added `SuspiciousImports` context for already suspicious PE-backed findings.
+
 ## v0.5.0 - 2026-07-06
 - Added PE section metadata parsing.
 - Added section name and section flags to reports and evidence metadata.

@@ -10,8 +10,15 @@ struct PeSection {
     std::string name;
     uint32_t virtual_address = 0;
     uint32_t virtual_size = 0;
+    uint32_t raw_offset = 0;
     uint32_t raw_size = 0;
     uint32_t characteristics = 0;
+};
+
+struct PeImportDll {
+    std::string dll;
+    std::vector<std::string> names;
+    uint32_t ordinal_count = 0;
 };
 
 struct PeQuick {
@@ -27,8 +34,14 @@ struct PeQuick {
     uint32_t entry_rva = 0;
     uint32_t size_of_image = 0;
     uint32_t checksum = 0;
+    uint32_t import_rva = 0;
+    uint32_t import_size = 0;
+    uint32_t export_rva = 0;
+    uint32_t export_size = 0;
     uint64_t image_base = 0;
     std::vector<PeSection> section_table;
+    std::vector<PeImportDll> imports;
+    std::vector<std::string> exports;
 };
 
 // Parse a compact PE identity from memory or file bytes.

@@ -31,6 +31,10 @@
           "module_path",
           "section_name",
           "section_flags",
+          "import_dlls",
+          "import_names",
+          "export_names",
+          "api_tags",
           "is_pe",
           "reasons",
           "severity",
@@ -82,6 +86,30 @@
           },
           "section_flags": {
             "type": "string"
+          },
+          "import_dlls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "import_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "export_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "api_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "is_pe": {
             "type": "boolean"

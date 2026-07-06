@@ -22,7 +22,7 @@ static void TestHelpers(){
     Check(ProtectToString(PAGE_READONLY) == "R--", "bad read-only protection string");
     Check(JsonString("C:\\Tools\\A \"quote\"") == "\"C:\\\\Tools\\\\A \\\"quote\\\"\"", "bad JSON escaping");
     Check(Sha256Str("abc").size() == 64, "bad SHA-256 length");
-    Check(std::string(kToolVersion) == "0.5.0", "bad tool version");
+    Check(std::string(kToolVersion) == "0.6.0", "bad tool version");
 
     std::vector<unsigned char> pe(0x1000, 0);
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(pe.data());
@@ -37,12 +37,43 @@ static void TestHelpers(){
     nt->OptionalHeader.AddressOfEntryPoint = 0x1234;
     nt->OptionalHeader.SizeOfImage = 0x5000;
     nt->OptionalHeader.Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI;
+    nt->OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
+    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = 0x300;
+    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = sizeof(IMAGE_IMPORT_DESCRIPTOR) * 2;
+    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress = 0x420;
+    nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size = sizeof(IMAGE_EXPORT_DIRECTORY);
     auto section = IMAGE_FIRST_SECTION(nt);
     std::memcpy(section->Name, ".text", 5);
     section->VirtualAddress = 0x1000;
     section->Misc.VirtualSize = 0x2000;
     section->SizeOfRawData = 0x2000;
     section->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
+
+    auto import_desc = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(pe.data() + 0x300);
+    import_desc[0].OriginalFirstThunk = 0x340;
+    import_desc[0].Name = 0x380;
+    import_desc[0].FirstThunk = 0x360;
+    auto thunk = reinterpret_cast<uint64_t*>(pe.data() + 0x340);
+    thunk[0] = 0x390;
+    std::memcpy(pe.data() + 0x380, "KERNEL32.dll", sizeof("KERNEL32.dll"));
+    auto import_by_name = pe.data() + 0x390;
+    import_by_name[0] = 0;
+    import_by_name[1] = 0;
+    std::memcpy(import_by_name + 2, "VirtualAllocEx", sizeof("VirtualAllocEx"));
+
+    auto export_dir = reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(pe.data() + 0x420);
+    export_dir->Name = 0x460;
+    export_dir->Base = 1;
+    export_dir->NumberOfFunctions = 1;
+    export_dir->NumberOfNames = 1;
+    export_dir->AddressOfFunctions = 0x480;
+    export_dir->AddressOfNames = 0x490;
+    export_dir->AddressOfNameOrdinals = 0x4a0;
+    *reinterpret_cast<uint32_t*>(pe.data() + 0x480) = 0x1000;
+    *reinterpret_cast<uint32_t*>(pe.data() + 0x490) = 0x4b0;
+    *reinterpret_cast<uint16_t*>(pe.data() + 0x4a0) = 0;
+    std::memcpy(pe.data() + 0x460, "sample.dll", sizeof("sample.dll"));
+    std::memcpy(pe.data() + 0x4b0, "SampleExport", sizeof("SampleExport"));
 
     PeQuick parsed = ParsePe(pe.data(), pe.size());
     Check(parsed.valid, "PE parser rejected valid header");
@@ -55,6 +86,12 @@ static void TestHelpers(){
     Check(parsed.section_table.size() == 3, "PE parser section count table mismatch");
     Check(parsed.section_table[0].name == ".text", "PE parser section name mismatch");
     Check(parsed.section_table[0].virtual_address == 0x1000, "PE parser section RVA mismatch");
+    Check(parsed.imports.size() == 1, "PE parser import DLL count mismatch");
+    Check(parsed.imports[0].dll == "KERNEL32.dll", "PE parser import DLL name mismatch");
+    Check(parsed.imports[0].names.size() == 1, "PE parser import name count mismatch");
+    Check(parsed.imports[0].names[0] == "VirtualAllocEx", "PE parser import name mismatch");
+    Check(parsed.exports.size() == 1, "PE parser export count mismatch");
+    Check(parsed.exports[0] == "SampleExport", "PE parser export name mismatch");
 }
 
 static std::wstring NormalizeTestPath(std::wstring path){

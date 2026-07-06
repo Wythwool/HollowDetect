@@ -25,6 +25,17 @@ static void Usage(){
     std::cout<<"hollowdet dump-schema\n";
 }
 
+static void RenderStringArray(std::ostringstream& out, const std::vector<std::string>& values) {
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            out << ", ";
+        }
+        out << JsonString(values[i]);
+    }
+    out << "]";
+}
+
 static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
     std::ostringstream o;
     o<<"{\n";
@@ -46,6 +57,18 @@ static int RenderJson(const std::vector<Anomaly>& v, const std::wstring& path){
         o<<"      \"module_path\": "<<JsonString(a.module_path)<<",\n";
         o<<"      \"section_name\": "<<JsonString(a.section_name)<<",\n";
         o<<"      \"section_flags\": "<<JsonString(a.section_flags)<<",\n";
+        o<<"      \"import_dlls\": ";
+        RenderStringArray(o, a.import_dlls);
+        o<<",\n";
+        o<<"      \"import_names\": ";
+        RenderStringArray(o, a.import_names);
+        o<<",\n";
+        o<<"      \"export_names\": ";
+        RenderStringArray(o, a.export_names);
+        o<<",\n";
+        o<<"      \"api_tags\": ";
+        RenderStringArray(o, a.api_tags);
+        o<<",\n";
         o<<"      \"is_pe\": "<<(a.is_pe?"true":"false")<<",\n";
         o<<"      \"reasons\": [";
         for(size_t j=0;j<a.reasons.size();++j){ if(j) o<<", "; o<<JsonString(a.reasons[j]); }

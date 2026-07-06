@@ -9,9 +9,11 @@
 #include <string>
 #include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <cwctype>
 #include <cstring>
 #include <map>
+#include <utility>
 
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -33,6 +35,13 @@ struct ModuleEntry {
 struct ImageLayout {
     bool valid = false;
     PeQuick pe;
+};
+
+struct PeMetadata {
+    std::vector<std::string> import_dlls;
+    std::vector<std::string> import_names;
+    std::vector<std::string> export_names;
+    std::vector<std::string> api_tags;
 };
 
 using NtQueryInformationThreadPtr = LONG (WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
@@ -179,6 +188,79 @@ static std::string SectionFlags(uint32_t characteristics){
     out += (characteristics & 0x80000000) ? 'W' : '-'; // IMAGE_SCN_MEM_WRITE
     out += (characteristics & 0x20000000) ? 'X' : '-'; // IMAGE_SCN_MEM_EXECUTE
     return out;
+}
+
+static std::string LowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+static void AppendUnique(std::vector<std::string>& values, const std::string& value, size_t limit) {
+    if (value.empty() || values.size() >= limit) {
+        return;
+    }
+    if (std::find(values.begin(), values.end(), value) == values.end()) {
+        values.push_back(value);
+    }
+}
+
+static void AddApiTagForName(const std::string& name, std::vector<std::string>& tags) {
+    std::string api = LowerAscii(name);
+    if (api == "virtualalloc" || api == "virtualallocex" ||
+        api == "virtualprotect" || api == "virtualprotectex" ||
+        api == "ntallocatevirtualmemory" || api == "ntprotectvirtualmemory") {
+        AppendUnique(tags, "memory-permission", 16);
+    }
+    if (api == "writeprocessmemory" || api == "ntwritevirtualmemory" ||
+        api == "readprocessmemory" || api == "ntreadvirtualmemory") {
+        AppendUnique(tags, "remote-memory", 16);
+    }
+    if (api == "createremotethread" || api == "ntcreatethreadex" ||
+        api == "rtlcreateuserthread") {
+        AppendUnique(tags, "remote-thread", 16);
+    }
+    if (api == "getthreadcontext" || api == "setthreadcontext" ||
+        api == "wow64getthreadcontext" || api == "wow64setthreadcontext" ||
+        api == "resumethread" || api == "suspendthread") {
+        AppendUnique(tags, "thread-context", 16);
+    }
+    if (api == "ntunmapviewofsection" || api == "zwunmapviewofsection") {
+        AppendUnique(tags, "image-unmap", 16);
+    }
+    if (api == "createfilemappinga" || api == "createfilemappingw" ||
+        api == "mapviewoffile" || api == "ntmapviewofsection" ||
+        api == "zwmapviewofsection") {
+        AppendUnique(tags, "section-map", 16);
+    }
+    if (api == "openprocess" || api == "ntopenprocess") {
+        AppendUnique(tags, "process-open", 16);
+    }
+}
+
+static PeMetadata ExtractPeMetadata(const PeQuick& pe) {
+    PeMetadata out{};
+    for (const auto& dll : pe.imports) {
+        AppendUnique(out.import_dlls, dll.dll, 32);
+        for (const auto& name : dll.names) {
+            AppendUnique(out.import_names, name, 96);
+            AddApiTagForName(name, out.api_tags);
+        }
+    }
+    for (const auto& name : pe.exports) {
+        AppendUnique(out.export_names, name, 96);
+    }
+    return out;
+}
+
+static void AddSuspiciousImportContext(DWORD type, const PeMetadata& metadata, std::vector<std::string>& reasons) {
+    if (metadata.api_tags.empty()) {
+        return;
+    }
+    if (type == MEM_PRIVATE || (!reasons.empty() && metadata.api_tags.size() >= 2)) {
+        reasons.push_back("SuspiciousImports");
+    }
 }
 
 static const ImageLayout& LoadImageLayout(HANDLE process, uintptr_t allocation_base, std::map<uintptr_t, ImageLayout>& cache){
@@ -368,6 +450,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         std::wstring module_path;
         std::string section_name;
         std::string section_flags;
+        PeMetadata pe_metadata;
         bool is_pe=false;
         std::vector<unsigned char> head;
         if (IsReadableProbeTarget(mbi.Protect)) {
@@ -387,8 +470,20 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
             if (layout.valid) {
                 uintptr_t rva = reinterpret_cast<uintptr_t>(mbi.BaseAddress) - allocation_base;
                 AddSectionProtectionCheck(mbi, FindSectionForRva(layout.pe, rva), section_name, section_flags, reasons);
+                pe_metadata = ExtractPeMetadata(layout.pe);
             }
         }
+
+        if (mbi.Type == MEM_PRIVATE && is_pe && IsReadableProbeTarget(mbi.Protect)) {
+            std::vector<unsigned char> pe_bytes;
+            if (ReadRemote(h, reinterpret_cast<uintptr_t>(mbi.BaseAddress), static_cast<size_t>(std::min<SIZE_T>(mbi.RegionSize, 65536)), pe_bytes)) {
+                PeQuick pe = ParsePe(pe_bytes.data(), pe_bytes.size());
+                if (pe.valid) {
+                    pe_metadata = ExtractPeMetadata(pe);
+                }
+            }
+        }
+        AddSuspiciousImportContext(mbi.Type, pe_metadata, reasons);
 
         if (mbi.Type == MEM_PRIVATE && HasExecute(mbi.Protect)) {
             thread_ids = ThreadsInRegion(thread_starts, reinterpret_cast<uintptr_t>(mbi.BaseAddress), static_cast<size_t>(mbi.RegionSize));
@@ -411,6 +506,10 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         a.module_path = module_path;
         a.section_name = section_name;
         a.section_flags = section_flags;
+        a.import_dlls = pe_metadata.import_dlls;
+        a.import_names = pe_metadata.import_names;
+        a.export_names = pe_metadata.export_names;
+        a.api_tags = pe_metadata.api_tags;
         a.is_pe = is_pe;
         // severity
         a.severity = (std::find(reasons.begin(),reasons.end(),"PrivatePE")!=reasons.end() ||
@@ -419,6 +518,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
                       std::find(reasons.begin(),reasons.end(),"ImageNotInModuleList")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"ModulePathMismatch")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"SectionProtectionMismatch")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"SuspiciousImports")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"PrivateThreadStart")!=reasons.end()) ? "high" :
                      (std::find(reasons.begin(),reasons.end(),"Write+Exec")!=reasons.end()) ? "medium" : "low";
         a.reasons = reasons;

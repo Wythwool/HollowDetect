@@ -43,9 +43,10 @@ hollowdet dump-schema
 - `ImageNotInModuleList`: an image allocation is not present in the process loader module list.
 - `ModulePathMismatch`: the VAD mapped path and loader module path disagree for the same image base.
 - `SectionProtectionMismatch`: an image page is writable and executable even though the PE section is not marked for both.
+- `SuspiciousImports`: the PE imports API groups commonly used for remote memory, thread-context, section mapping, or image unmapping work, attached only as context for an existing suspicious region.
 - `PrivateThreadStart`: a thread starts inside a private executable region.
 
-Severity is intentionally simple: private PE, image RWX, module/VAD mismatch, section protection mismatch, image header mismatch, and private thread start are high; writable executable memory is medium; missing image header is low.
+Severity is intentionally simple: private PE, image RWX, module/VAD mismatch, section protection mismatch, suspicious imports on a suspicious region, image header mismatch, and private thread start are high; writable executable memory is medium; missing image header is low.
 
 ## Example
 
@@ -72,7 +73,7 @@ Baselines store stable finding fingerprints for known benign applications. Excep
 
 ## Output
 
-`scan` and `snapshot save` write a JSON document with a top-level `items` array. Each item contains the process path, region address, allocation base, protection, mapped path, loader module path, PE section name/flags when available, reasons, optional thread IDs, severity, and stable fingerprint. `snapshot diff` prints added and removed fingerprints as JSON.
+`scan` and `snapshot save` write a JSON document with a top-level `items` array. Each item contains the process path, region address, allocation base, protection, mapped path, loader module path, PE section name/flags when available, imported DLLs, imported API names, exported names, API group tags, reasons, optional thread IDs, severity, and stable fingerprint. `snapshot diff` prints added and removed fingerprints as JSON.
 
 Evidence mode writes a `.bin` memory slice, a matching metadata JSON file, and appends one line per capture to `manifest.jsonl`. The metadata includes the tool version, UTC capture time, dump size, and SHA-256 of the captured bytes.
 

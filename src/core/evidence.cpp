@@ -62,6 +62,17 @@ std::string UtcTimestamp() {
     return out.str();
 }
 
+void RenderStringArray(std::ostringstream& out, const std::vector<std::string>& values, const char* separator) {
+    out << "[";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            out << separator;
+        }
+        out << JsonString(values[i]);
+    }
+    out << "]";
+}
+
 std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_name, size_t dump_size, const std::string& dump_sha256, const std::string& captured_at) {
     std::ostringstream out;
     out << "{\n";
@@ -79,6 +90,18 @@ std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_
     out << "  \"module_path\": " << JsonString(anomaly.module_path) << ",\n";
     out << "  \"section_name\": " << JsonString(anomaly.section_name) << ",\n";
     out << "  \"section_flags\": " << JsonString(anomaly.section_flags) << ",\n";
+    out << "  \"import_dlls\": ";
+    RenderStringArray(out, anomaly.import_dlls, ", ");
+    out << ",\n";
+    out << "  \"import_names\": ";
+    RenderStringArray(out, anomaly.import_names, ", ");
+    out << ",\n";
+    out << "  \"export_names\": ";
+    RenderStringArray(out, anomaly.export_names, ", ");
+    out << ",\n";
+    out << "  \"api_tags\": ";
+    RenderStringArray(out, anomaly.api_tags, ", ");
+    out << ",\n";
     out << "  \"is_pe\": " << (anomaly.is_pe ? "true" : "false") << ",\n";
     out << "  \"reasons\": [";
     for (size_t i = 0; i < anomaly.reasons.size(); ++i) {
@@ -121,6 +144,14 @@ std::string RenderManifestLine(const Anomaly& anomaly, const std::wstring& dump_
     out << ",\"module_path\":" << JsonString(anomaly.module_path);
     out << ",\"section_name\":" << JsonString(anomaly.section_name);
     out << ",\"section_flags\":" << JsonString(anomaly.section_flags);
+    out << ",\"import_dlls\":";
+    RenderStringArray(out, anomaly.import_dlls, ",");
+    out << ",\"import_names\":";
+    RenderStringArray(out, anomaly.import_names, ",");
+    out << ",\"export_names\":";
+    RenderStringArray(out, anomaly.export_names, ",");
+    out << ",\"api_tags\":";
+    RenderStringArray(out, anomaly.api_tags, ",");
     out << ",\"reasons\":[";
     for (size_t i = 0; i < anomaly.reasons.size(); ++i) {
         if (i != 0) {
