@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.0 - 2026-07-06
+- Added PE section metadata parsing.
+- Added section name and section flags to reports and evidence metadata.
+- Added `SectionProtectionMismatch` for image pages whose memory protection conflicts with section characteristics.
+
 ## v0.4.0 - 2026-07-06
 - Added loader module-list consistency checks for image-backed allocations.
 - Added `ImageNotInModuleList` and `ModulePathMismatch` signals.

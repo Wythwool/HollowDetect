@@ -77,6 +77,8 @@ std::string RenderEvidenceJson(const Anomaly& anomaly, const std::wstring& dump_
     out << "  \"protect\": " << JsonString(anomaly.protect) << ",\n";
     out << "  \"mapped_path\": " << JsonString(anomaly.mapped_path) << ",\n";
     out << "  \"module_path\": " << JsonString(anomaly.module_path) << ",\n";
+    out << "  \"section_name\": " << JsonString(anomaly.section_name) << ",\n";
+    out << "  \"section_flags\": " << JsonString(anomaly.section_flags) << ",\n";
     out << "  \"is_pe\": " << (anomaly.is_pe ? "true" : "false") << ",\n";
     out << "  \"reasons\": [";
     for (size_t i = 0; i < anomaly.reasons.size(); ++i) {
@@ -117,6 +119,8 @@ std::string RenderManifestLine(const Anomaly& anomaly, const std::wstring& dump_
     out << ",\"protect\":" << JsonString(anomaly.protect);
     out << ",\"mapped_path\":" << JsonString(anomaly.mapped_path);
     out << ",\"module_path\":" << JsonString(anomaly.module_path);
+    out << ",\"section_name\":" << JsonString(anomaly.section_name);
+    out << ",\"section_flags\":" << JsonString(anomaly.section_flags);
     out << ",\"reasons\":[";
     for (size_t i = 0; i < anomaly.reasons.size(); ++i) {
         if (i != 0) {

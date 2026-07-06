@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
 using namespace hollow;
@@ -21,7 +22,7 @@ static void TestHelpers(){
     Check(ProtectToString(PAGE_READONLY) == "R--", "bad read-only protection string");
     Check(JsonString("C:\\Tools\\A \"quote\"") == "\"C:\\\\Tools\\\\A \\\"quote\\\"\"", "bad JSON escaping");
     Check(Sha256Str("abc").size() == 64, "bad SHA-256 length");
-    Check(std::string(kToolVersion) == "0.4.0", "bad tool version");
+    Check(std::string(kToolVersion) == "0.5.0", "bad tool version");
 
     std::vector<unsigned char> pe(0x1000, 0);
     auto dos = reinterpret_cast<IMAGE_DOS_HEADER*>(pe.data());
@@ -36,6 +37,12 @@ static void TestHelpers(){
     nt->OptionalHeader.AddressOfEntryPoint = 0x1234;
     nt->OptionalHeader.SizeOfImage = 0x5000;
     nt->OptionalHeader.Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI;
+    auto section = IMAGE_FIRST_SECTION(nt);
+    std::memcpy(section->Name, ".text", 5);
+    section->VirtualAddress = 0x1000;
+    section->Misc.VirtualSize = 0x2000;
+    section->SizeOfRawData = 0x2000;
+    section->Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
 
     PeQuick parsed = ParsePe(pe.data(), pe.size());
     Check(parsed.valid, "PE parser rejected valid header");
@@ -45,6 +52,9 @@ static void TestHelpers(){
     Check(parsed.sections == 3, "PE parser section count mismatch");
     Check(parsed.entry_rva == 0x1234, "PE parser entry RVA mismatch");
     Check(parsed.size_of_image == 0x5000, "PE parser image size mismatch");
+    Check(parsed.section_table.size() == 3, "PE parser section count table mismatch");
+    Check(parsed.section_table[0].name == ".text", "PE parser section name mismatch");
+    Check(parsed.section_table[0].virtual_address == 0x1000, "PE parser section RVA mismatch");
 }
 
 static std::wstring NormalizeTestPath(std::wstring path){

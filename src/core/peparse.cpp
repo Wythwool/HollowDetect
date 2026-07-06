@@ -1,6 +1,7 @@
 #include "hollowdet/peparse.h"
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 
 namespace hollow {
 
@@ -111,7 +112,28 @@ struct IMAGE_NT_HEADERS64_ {
     IMAGE_FILE_HEADER_ FileHeader;
     IMAGE_OPTIONAL_HEADER64_ OptionalHeader;
 };
+
+struct IMAGE_SECTION_HEADER_ {
+    uint8_t  Name[8];
+    uint32_t VirtualSize;
+    uint32_t VirtualAddress;
+    uint32_t SizeOfRawData;
+    uint32_t PointerToRawData;
+    uint32_t PointerToRelocations;
+    uint32_t PointerToLinenumbers;
+    uint16_t NumberOfRelocations;
+    uint16_t NumberOfLinenumbers;
+    uint32_t Characteristics;
+};
 #pragma pack(pop)
+
+static std::string SectionName(const uint8_t name[8]){
+    size_t n = 0;
+    while (n < 8 && name[n] != 0) {
+        ++n;
+    }
+    return std::string(reinterpret_cast<const char*>(name), n);
+}
 
 PeQuick ParsePe(const unsigned char* data, size_t size){
     PeQuick out{};
@@ -158,6 +180,23 @@ PeQuick ParsePe(const unsigned char* data, size_t size){
         out.has_clr = opt->NumberOfRvaAndSizes > 14 &&
                       opt->DataDirectory[14].VirtualAddress != 0 &&
                       opt->DataDirectory[14].Size != 0;
+    }
+
+    size_t section_offset = opt_offset + file->SizeOfOptionalHeader;
+    size_t max_sections = std::min<size_t>(file->NumberOfSections, 96);
+    for (size_t i = 0; i < max_sections; ++i) {
+        size_t off = section_offset + i * sizeof(IMAGE_SECTION_HEADER_);
+        if (off + sizeof(IMAGE_SECTION_HEADER_) > size) {
+            break;
+        }
+        auto sec = (const IMAGE_SECTION_HEADER_*)(data + off);
+        PeSection item{};
+        item.name = SectionName(sec->Name);
+        item.virtual_address = sec->VirtualAddress;
+        item.virtual_size = sec->VirtualSize;
+        item.raw_size = sec->SizeOfRawData;
+        item.characteristics = sec->Characteristics;
+        out.section_table.push_back(item);
     }
     return out;
 }

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cwctype>
 #include <cstring>
+#include <map>
 
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -27,6 +28,11 @@ struct ModuleEntry {
     uintptr_t base = 0;
     size_t size = 0;
     std::wstring path;
+};
+
+struct ImageLayout {
+    bool valid = false;
+    PeQuick pe;
 };
 
 using NtQueryInformationThreadPtr = LONG (WINAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
@@ -150,6 +156,63 @@ static bool SamePeIdentity(const PeQuick& a, const PeQuick& b){
            a.subsystem == b.subsystem;
 }
 
+static uint32_t SectionSpan(const PeSection& section){
+    return std::max<uint32_t>(section.virtual_size, section.raw_size);
+}
+
+static const PeSection* FindSectionForRva(const PeQuick& pe, uintptr_t rva){
+    for (const auto& section : pe.section_table) {
+        uint32_t span = SectionSpan(section);
+        if (span == 0) continue;
+        uintptr_t start = section.virtual_address;
+        uintptr_t end = start + span;
+        if (rva >= start && rva < end) {
+            return &section;
+        }
+    }
+    return nullptr;
+}
+
+static std::string SectionFlags(uint32_t characteristics){
+    std::string out;
+    out += (characteristics & 0x40000000) ? 'R' : '-'; // IMAGE_SCN_MEM_READ
+    out += (characteristics & 0x80000000) ? 'W' : '-'; // IMAGE_SCN_MEM_WRITE
+    out += (characteristics & 0x20000000) ? 'X' : '-'; // IMAGE_SCN_MEM_EXECUTE
+    return out;
+}
+
+static const ImageLayout& LoadImageLayout(HANDLE process, uintptr_t allocation_base, std::map<uintptr_t, ImageLayout>& cache){
+    auto found = cache.find(allocation_base);
+    if (found != cache.end()) {
+        return found->second;
+    }
+
+    ImageLayout layout{};
+    std::vector<unsigned char> head;
+    const size_t probes[] = {65536, 16384, 4096};
+    for (size_t wanted : probes) {
+        if (ReadRemote(process, allocation_base, wanted, head)) {
+            layout.pe = ParsePe(head.data(), head.size());
+            layout.valid = layout.pe.valid;
+            break;
+        }
+    }
+    auto inserted = cache.emplace(allocation_base, std::move(layout));
+    return inserted.first->second;
+}
+
+static void AddSectionProtectionCheck(const MEMORY_BASIC_INFORMATION& mbi, const PeSection* section, std::string& section_name, std::string& section_flags, std::vector<std::string>& reasons){
+    if (!section) return;
+    section_name = section->name;
+    section_flags = SectionFlags(section->characteristics);
+
+    bool section_write = (section->characteristics & 0x80000000) != 0;
+    bool section_exec = (section->characteristics & 0x20000000) != 0;
+    if (mbi.Type == MEM_IMAGE && HasWriteExec(mbi.Protect) && !(section_write && section_exec)) {
+        reasons.push_back("SectionProtectionMismatch");
+    }
+}
+
 static void AddImageHeaderComparison(const std::vector<unsigned char>& head, const std::wstring& mapped, std::vector<std::string>& reasons){
     if (head.empty() || mapped.empty()) return;
     PeQuick memory_pe = ParsePe(head.data(), head.size());
@@ -166,13 +229,13 @@ static void AddImageHeaderComparison(const std::vector<unsigned char>& head, con
     }
 }
 
-static std::string Fingerprint(const std::wstring& proc, const std::wstring& mapped, const std::string& type, const std::string& prot, bool is_pe, const std::vector<std::string>& reasons){
+static std::string Fingerprint(const std::wstring& proc, const std::wstring& mapped, const std::string& type, const std::string& prot, bool is_pe, const std::string& section_name, const std::vector<std::string>& reasons){
     std::ostringstream o; 
     std::wstring pl = ToLower(proc);
     std::wstring ml = ToLower(mapped);
     std::string p8 = WideToUtf8(pl);
     std::string m8 = WideToUtf8(ml);
-    o<<p8<<"|"<<m8<<"|"<<type<<"|"<<prot<<"|"<<(is_pe ? "pe" : "raw")<<"|";
+    o<<p8<<"|"<<m8<<"|"<<type<<"|"<<prot<<"|"<<(is_pe ? "pe" : "raw")<<"|"<<section_name<<"|";
     for (auto& r: reasons) o<<r<<",";
     return Sha256Str(o.str());
 }
@@ -289,6 +352,7 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
     std::vector<ThreadStart> thread_starts = CollectThreadStarts(pid);
     std::vector<ModuleEntry> modules;
     bool modules_known = CollectModules(pid, modules);
+    std::map<uintptr_t, ImageLayout> image_cache;
     while (p < maxAddr){
         MEMORY_BASIC_INFORMATION mbi{};
         SIZE_T got = VirtualQueryEx(h, (LPCVOID)p, &mbi, sizeof(mbi));
@@ -302,6 +366,8 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         std::vector<std::string> reasons;
         std::vector<DWORD> thread_ids;
         std::wstring module_path;
+        std::string section_name;
+        std::string section_flags;
         bool is_pe=false;
         std::vector<unsigned char> head;
         if (IsReadableProbeTarget(mbi.Protect)) {
@@ -315,6 +381,14 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && IsReadableProbeTarget(mbi.Protect) && !is_pe) reasons.push_back("ImageHeaderNotMZ");
         if (mbi.Type == MEM_IMAGE && mbi.AllocationBase == mbi.BaseAddress && is_pe) AddImageHeaderComparison(head, mapped, reasons);
         AddModuleConsistency(mbi, is_pe, mapped, modules_known, modules, module_path, reasons);
+        if (mbi.Type == MEM_IMAGE) {
+            uintptr_t allocation_base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+            const ImageLayout& layout = LoadImageLayout(h, allocation_base, image_cache);
+            if (layout.valid) {
+                uintptr_t rva = reinterpret_cast<uintptr_t>(mbi.BaseAddress) - allocation_base;
+                AddSectionProtectionCheck(mbi, FindSectionForRva(layout.pe, rva), section_name, section_flags, reasons);
+            }
+        }
 
         if (mbi.Type == MEM_PRIVATE && HasExecute(mbi.Protect)) {
             thread_ids = ThreadsInRegion(thread_starts, reinterpret_cast<uintptr_t>(mbi.BaseAddress), static_cast<size_t>(mbi.RegionSize));
@@ -335,6 +409,8 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
         a.protect = ProtectToString(mbi.Protect);
         a.mapped_path = mapped;
         a.module_path = module_path;
+        a.section_name = section_name;
+        a.section_flags = section_flags;
         a.is_pe = is_pe;
         // severity
         a.severity = (std::find(reasons.begin(),reasons.end(),"PrivatePE")!=reasons.end() ||
@@ -342,11 +418,12 @@ static bool ScanPid(DWORD pid, const ScanOptions& opt, std::vector<Anomaly>& out
                       std::find(reasons.begin(),reasons.end(),"ImageHeaderMismatch")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"ImageNotInModuleList")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"ModulePathMismatch")!=reasons.end() ||
+                      std::find(reasons.begin(),reasons.end(),"SectionProtectionMismatch")!=reasons.end() ||
                       std::find(reasons.begin(),reasons.end(),"PrivateThreadStart")!=reasons.end()) ? "high" :
                      (std::find(reasons.begin(),reasons.end(),"Write+Exec")!=reasons.end()) ? "medium" : "low";
         a.reasons = reasons;
         a.thread_ids = thread_ids;
-        a.fingerprint = Fingerprint(process, mapped, a.type, a.protect, a.is_pe, a.reasons);
+        a.fingerprint = Fingerprint(process, mapped, a.type, a.protect, a.is_pe, a.section_name, a.reasons);
 
         // baseline filter
         bool suppressed=false;

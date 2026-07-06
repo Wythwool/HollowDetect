@@ -5,7 +5,7 @@
 
 namespace hollow {
 
-inline constexpr const char* kToolVersion = "0.4.0";
+inline constexpr const char* kToolVersion = "0.5.0";
 
 struct RegionInfo {
     uintptr_t base;
@@ -26,6 +26,8 @@ struct Anomaly {
     std::string protect;// e.g. RWX
     std::wstring mapped_path;
     std::wstring module_path;
+    std::string section_name;
+    std::string section_flags;
     bool is_pe;
     std::vector<std::string> reasons;
     std::string severity;

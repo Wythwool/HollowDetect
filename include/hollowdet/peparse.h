@@ -1,8 +1,18 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#include <string>
+#include <vector>
 
 namespace hollow {
+
+struct PeSection {
+    std::string name;
+    uint32_t virtual_address = 0;
+    uint32_t virtual_size = 0;
+    uint32_t raw_size = 0;
+    uint32_t characteristics = 0;
+};
 
 struct PeQuick {
     bool valid = false;
@@ -18,6 +28,7 @@ struct PeQuick {
     uint32_t size_of_image = 0;
     uint32_t checksum = 0;
     uint64_t image_base = 0;
+    std::vector<PeSection> section_table;
 };
 
 // Parse a compact PE identity from memory or file bytes.

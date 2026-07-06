@@ -29,6 +29,8 @@
           "protect",
           "mapped_path",
           "module_path",
+          "section_name",
+          "section_flags",
           "is_pe",
           "reasons",
           "severity",
@@ -73,6 +75,12 @@
             "type": "string"
           },
           "module_path": {
+            "type": "string"
+          },
+          "section_name": {
+            "type": "string"
+          },
+          "section_flags": {
             "type": "string"
           },
           "is_pe": {
